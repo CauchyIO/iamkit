@@ -1,0 +1,41 @@
+# ACME Corp IAM convention — the settled outcome of walking principles/index.md.
+# Copy this file as the starting point for a new org: adjust the naming
+# patterns and defaults, keep every registry rule listed (drop to
+# mode: advisory rather than deleting, so the gap stays visible).
+version: "1.0"
+convention: acme_iam
+
+# IAM-P07: names carry their kind; environment lives in a field, not the name.
+naming:
+  security_group: "sg-{function}"
+  license_group: "license-{sku}"
+  mailing_list: "ml-{name}"
+  m365_group: "{name}"
+
+# IAM-P02: records complete enough that licensing never stalls.
+defaults:
+  new_user:
+    groups:
+      - "license-e3"
+    usage_location: "NL"
+
+rules:
+  # IAM-P02
+  - rule: require_usage_location
+    mode: enforced
+    applies_to: [user]
+  # IAM-P01
+  - rule: group_must_have_owner
+    mode: enforced
+    applies_to: [security_group, m365_group]
+  # IAM-P07
+  - rule: naming_pattern
+    mode: enforced
+    pattern: "(sg|license|ml)-[a-z0-9][a-z0-9-]*"
+    applies_to: [security_group, license_group, mailing_list]
+  # IAM-P07
+  - rule: environment_suffix
+    mode: advisory
+
+tags:
+  managed_by: iamkit

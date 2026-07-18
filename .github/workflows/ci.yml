@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run pytest -q
+
+  # The leak-guard backstop lives in .github/workflows/leak-guard.yml — a
+  # separate workflow on pull_request_target so fork PRs are scanned with
+  # the LEAK_PATTERNS secret too.
+
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [entra, github]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=terraform/modules/${{ matrix.module }} init -backend=false
+      - run: terraform -chdir=terraform/modules/${{ matrix.module }} validate
+      - run: terraform -chdir=terraform/modules/${{ matrix.module }} fmt -check

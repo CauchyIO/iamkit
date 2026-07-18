@@ -1,0 +1,81 @@
+# Server-side leak backstop. Runs on pull_request_target so fork PRs are
+# scanned too (the plain pull_request event cannot read the LEAK_PATTERNS
+# secret on forks).
+#
+# SECURITY INVARIANTS:
+# - This workflow checks out untrusted PR code while holding a secret. It
+#   must NEVER execute anything from the checkout — no uv sync, no pytest,
+#   no terraform, no scripts. Read-only grep over the tree and git
+#   metadata, nothing else. Matched content is never echoed; only paths.
+# - The author allowlist is read from the BASE ref on PR events, never from
+#   the PR head, and PRs may not modify it — it is both excluded from the
+#   tree scan and used to filter the metadata scan, so a head-controlled
+#   copy could smuggle content or widen the filter.
+name: leak-guard
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+      - name: Materialize leak patterns and trusted allowlist
+        env:
+          LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          if [ -z "$LEAK_PATTERNS" ]; then
+            echo "LEAK_PATTERNS secret is not available; refusing to skip the guard." >&2
+            exit 1
+          fi
+          printf '%s\n' "$LEAK_PATTERNS" > "$RUNNER_TEMP/leak-patterns.txt"
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            if ! git diff --quiet "$BASE_SHA" HEAD -- .github/leak-allowed-authors.txt; then
+              echo "PRs may not modify .github/leak-allowed-authors.txt; a maintainer must apply allowlist changes." >&2
+              exit 1
+            fi
+            git show "$BASE_SHA:.github/leak-allowed-authors.txt" > "$RUNNER_TEMP/allowed-authors.txt"
+          else
+            cp .github/leak-allowed-authors.txt "$RUNNER_TEMP/allowed-authors.txt"
+          fi
+      - name: Fail on tenant references in the tree
+        shell: bash
+        run: |
+          hits=$(grep -rilE -f "$RUNNER_TEMP/leak-patterns.txt" \
+              --exclude-dir=.git --exclude=leak-allowed-authors.txt . \
+            | grep -vE "^(\./)?(LICENSE|README\.md)$" || true)
+          if [ -n "$hits" ]; then
+            echo "Leak pattern matched in:" >&2
+            echo "$hits" >&2
+            exit 1
+          fi
+      - name: Fail on tenant references in commit metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          # PRs: scan only the incoming commits; pushes: scan everything.
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            log_args=("$BASE_SHA..HEAD")
+          else
+            log_args=(--all)
+          fi
+          if git log "${log_args[@]}" --format='%an <%ae> %cn <%ce>%n%s%n%b' \
+            | grep -iE -f "$RUNNER_TEMP/leak-patterns.txt" \
+            | grep -qvxiE -f "$RUNNER_TEMP/allowed-authors.txt"; then
+            echo "Commit metadata matches a leak pattern." >&2
+            exit 1
+          fi
