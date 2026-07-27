@@ -8,6 +8,7 @@ pillar: administration
 statement: "Global admin roles are held by at most a handful of dedicated identities; break-glass and board-level accounts are read-only data sources to IaC, never managed resources."
 covers:
   - terraform:existing_users
+  - executor:exchange.resolve_desired_state
 informs: []
 review:
   owner: catalog maintainer
@@ -30,12 +31,22 @@ two to four Global Administrators plus excluded break-glass accounts.
 - **Technical**: `iam_users_existing` principals are data sources; a
   `terraform destroy` cannot touch them. Admin role holders use dedicated
   admin identities, not daily-driver accounts.
+- **Technical**: attribute-level mail administration is not account lifecycle.
+  An automation identity may reconcile SMTP addresses on an unmanaged
+  principal's mailbox provided it cannot create, disable, delete, or sign in as
+  the account — which means a custom Exchange role group with a write scope,
+  never the tenant-wide Exchange Administrator directory role. iamkit keeps the
+  seam explicit rather than implicit: `executors.exchange.resolve_desired_state`
+  refuses `managed=False` principals unless the caller passes
+  `allow_unmanaged_users=True`.
 - **Organizational**: break-glass credentials are custodied and tested on a
   calendar, outside this repo and outside the tenant's SSO path.
 
 ## Exceptions
 
-None. An exception to this principle is the incident.
+None. An exception to this principle is the incident. The alias seam above is
+a scope clarification, not an exception: the account's existence, its enabled
+state, and its sign-in path remain outside every automation plane.
 
 ## Tensions
 

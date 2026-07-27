@@ -82,6 +82,15 @@ memberships) live alongside the module call in your root module; the module
 exposes `user_object_ids` / `*_group_object_ids` / `team_node_ids` outputs to
 wire them up.
 
+Aliases are the exception to the Terraform path. `User.aliases` declares
+secondary SMTP addresses; they reconcile through
+`iamkit.executors.exchange.MailboxAliasExecutor`, which drives the
+ExchangeOnlineManagement PowerShell module (`pwsh` required) under app-only
+certificate auth. Grant that app a **custom Exchange role group with a write
+scope** rather than the tenant-wide Exchange Administrator directory role —
+Exchange RBAC for Applications does not cover management cmdlets, so the role
+group is the only way to narrow what the automation can touch.
+
 ## Principles and conventions
 
 [`principles/`](principles/index.md) is the governance baseline: eight
