@@ -87,6 +87,36 @@ class TestResolveDesiredState:
         })
         assert resolve_desired_state(config) == []
 
+    def test_disabled_unmanaged_user_is_skipped_not_refused(self):
+        # IAM-P03 states that the disabled check runs before the managed check,
+        # so a disabled managed=False principal is skipped rather than raised
+        # on. Neither single-flag test above holds both flags at once, so
+        # swapping the two guards would falsify the principle with a green
+        # suite.
+        config = IAMConfig(users={
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["privacy@acme.example"], managed=False,
+                account_enabled=False,
+            ),
+        })
+        assert resolve_desired_state(config) == []
+
+    def test_users_are_resolved_in_a_deterministic_order(self):
+        # Export determinism is a repo-wide decision; with one aliased user the
+        # sort in resolve_desired_state is unobservable.
+        config = IAMConfig(users={
+            "zoe": User(
+                name="zoe", display_name="Zoe", email="zoe@acme.example",
+                aliases=["z@acme.example"],
+            ),
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["privacy@acme.example"],
+            ),
+        })
+        assert [s.name for s in resolve_desired_state(config)] == ["alice", "zoe"]
+
     def test_unmanaged_user_refused_by_default(self):
         config = IAMConfig(users={
             "alice": User(
