@@ -181,6 +181,36 @@ class TestReconciliation:
         assert result.operation == OperationType.NO_OP
         assert client.calls == []
 
+    def test_primary_among_the_secondaries_in_another_case_is_never_removed(self):
+        # Same trap as above, but with the casing the client happens to apply
+        # removed: the exclusion must be the executor's own, not one inherited
+        # from ExchangeOnlineClient lowercasing everything on the way in.
+        client = FakeExchangeClient({
+            "alice@acme.example": MailboxAddresses(
+                upn="alice@acme.example",
+                primary="alice@acme.example",
+                secondary=("Alice@acme.example", "privacy@acme.example"),
+            )
+        })
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        result = ex.create_or_update(_state("privacy@acme.example"))
+        assert result.operation == OperationType.NO_OP
+        assert client.calls == []
+
+    def test_alias_equal_to_a_differently_cased_primary_is_refused(self):
+        # The declaration-side half of the same exclusion: a primary handed
+        # over in mixed case must still make the matching alias undeclarable.
+        client = FakeExchangeClient({
+            "alice@acme.example": MailboxAddresses(
+                upn="alice@acme.example",
+                primary="Alice@acme.example",
+                secondary=(),
+            )
+        })
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        with pytest.raises(ValueError, match="primary address"):
+            ex.create_or_update(_state("alice@acme.example"))
+
     def test_alias_on_an_unmanaged_domain_is_left_alone(self):
         client = FakeExchangeClient({
             "alice@acme.example": _mailbox("alice@legacy.example")

@@ -2,22 +2,29 @@
 
 Reconciles the `aliases` declared on users onto their Exchange Online
 mailboxes as secondary proxy addresses. The reconciliation is deliberately
-narrow: it can only add and remove lowercase `smtp:` addresses inside a
-declared set of managed domains.
+narrow: it can only add and remove addresses inside a declared set of
+managed domains.
 
-Two of the three exclusions hold locally, whatever the client hands over:
+Two exclusions hold locally, in whatever case the client hands addresses over:
 
 * The primary address cannot be added (declaring it as an alias is refused)
   and cannot be removed (it is excluded from the removable set even when it
   also appears among the secondaries, which an AD-authored `proxyAddresses`
-  list in a hybrid tenant can produce).
+  list in a hybrid tenant can produce). Both comparisons case-fold, so
+  neither depends on the client having lowercased anything.
 * The .onmicrosoft.com routing address cannot be reached because it can
-  never be a managed domain.
+  never be a managed domain: the executor refuses one at construction, and
+  removals are drawn only from addresses whose domain is in that set.
 
-The third is inherited rather than local: non-SMTP entries (SIP, X500, SPO)
-are out of reach because `MailboxAddresses.secondary` is documented to hold
-only the stripped lowercase `smtp:` entries, and this module never reads
-past it.
+Two further properties are inherited from the client rather than enforced
+here, and are only as true as `iamkit.clients.exchange` makes them:
+
+* Addresses reach Exchange as lowercase `smtp:` entries — the prefix that
+  marks an address secondary rather than primary, and the lowercasing of the
+  address itself, are both applied by the client, not here.
+* Non-SMTP entries (SIP, X500, SPO) are out of reach because
+  `MailboxAddresses.secondary` is documented to hold only the stripped
+  `smtp:` entries, and this module never reads past it.
 """
 
 from __future__ import annotations
@@ -138,7 +145,7 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                     f"Alias '{alias}' on '{resource.upn}' is outside the managed "
                     f"domains {sorted(self._domains)}"
                 )
-            if lowered == current.primary:
+            if lowered == current.primary.lower():
                 raise ValueError(
                     f"Alias '{alias}' is the primary address of '{resource.upn}'; "
                     "changing the primary is a rename, not an alias"
@@ -148,11 +155,13 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         # The primary is excluded explicitly, not just by virtue of being
         # undeclarable: if it also appears among the secondaries it is not in
         # `desired` (declaring it raises above), so it would otherwise fall
-        # straight into the removal set.
+        # straight into the removal set. Both comparisons against the primary
+        # case-fold, so the exclusion is this module's own rather than one
+        # inherited from the client normalising addresses on the way in.
         in_scope = {
             address
             for address in current.secondary
-            if address != current.primary
+            if address.lower() != current.primary.lower()
             and address.rpartition("@")[2] in self._domains
         }
         return sorted(desired - in_scope), sorted(in_scope - desired)
