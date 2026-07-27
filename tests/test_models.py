@@ -217,7 +217,7 @@ class TestUserAliases:
         assert user.aliases == ["privacy@acme.example"]
 
     def test_alias_without_at_rejected(self):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="Invalid alias"):
             User(
                 name="alice",
                 display_name="Alice",
@@ -226,7 +226,7 @@ class TestUserAliases:
             )
 
     def test_duplicate_alias_rejected(self):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="Duplicate alias"):
             User(
                 name="alice",
                 display_name="Alice",
@@ -235,7 +235,7 @@ class TestUserAliases:
             )
 
     def test_alias_equal_to_primary_rejected(self):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="duplicates the primary address"):
             User(
                 name="alice",
                 display_name="Alice",
