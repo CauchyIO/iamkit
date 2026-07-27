@@ -670,3 +670,16 @@ class TestEmailAddressUniqueness:
             "privacy@acme.example",
             "support@acme.example",
         ]
+
+    def test_mixed_case_primary_collides_with_lowercase_alias(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="Alice@Acme.Example",
+            ),
+            "bob": User(
+                name="bob", display_name="Bob", email="bob@acme.example",
+                aliases=["alice@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="alice@acme.example"):
+            IAMConfig(users=users)
