@@ -229,6 +229,19 @@ class TestReconciliation:
         assert result.operation == OperationType.NO_OP
         assert client.calls == []
 
+    def test_undeclared_alias_in_a_mixed_case_managed_domain_is_removed(self):
+        # The other side of folding the scope filter, and a widening: pre-fold
+        # this address failed the domain check and survived as unmanaged drift.
+        # It is the same address as one in a managed domain, so it is in scope
+        # and removable — intended, and pinned here because it is a delete.
+        client = FakeExchangeClient(
+            {"alice@acme.example": _mailbox("Old@ACME.example")}
+        )
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        result = ex.create_or_update(_state())
+        assert result.operation == OperationType.UPDATE
+        assert client.calls == [("alice@acme.example", [], ["old@acme.example"])]
+
     def test_alias_on_an_unmanaged_domain_is_left_alone(self):
         client = FakeExchangeClient({
             "alice@acme.example": _mailbox("alice@legacy.example")

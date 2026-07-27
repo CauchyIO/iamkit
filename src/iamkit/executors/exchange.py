@@ -5,9 +5,12 @@ mailboxes as secondary proxy addresses. The reconciliation is deliberately
 narrow: it can only add and remove addresses inside a declared set of
 managed domains.
 
-Three properties hold locally, in whatever case the client hands addresses
-over: every address is folded before it is compared or emitted, so nothing
-below depends on the client having normalised anything.
+Three properties hold locally, in whatever case the client hands the mailbox's
+addresses over: every address entering the diff — the primary, the current
+secondaries, and the declared aliases — is folded before it is compared, and
+the add and remove lists are emitted folded. (The mailbox's own UPN is not:
+it is passed through to the client as given, and `_current` folds it only to
+key the cache.)
 
 * The primary address cannot be added (declaring it as an alias is refused)
   and cannot be removed (it is excluded from the removable set even when it

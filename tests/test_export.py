@@ -250,3 +250,64 @@ class TestGraphAPIExporter:
         payload = GraphAPIExporter.shared_mailbox_payload(mb)
         assert payload["displayName"] == "Support Mailbox"
         assert "SharedMailbox" in payload["resourceBehaviorOptions"]
+
+
+class TestAliasesAreNeverExported:
+    """Pins docs/ARCHITECTURE.md's "never exported" key decision.
+
+    No Terraform provider can write mailbox proxy addresses, so an alias
+    reaching either tfvars payload would be dead weight at best and a schema
+    error at worst. Today this holds only because the user builders enumerate
+    fields by hand; a later switch to ``model_dump()`` — as the conditional
+    access branch already uses — would export ``aliases`` with nothing failing.
+    """
+
+    CANARY_MANAGED = "canary-managed@acme.example"
+    CANARY_EXISTING = "canary-existing@acme.example"
+
+    def _config(self) -> IAMConfig:
+        return IAMConfig(
+            users={
+                "alice": User(
+                    name="alice",
+                    display_name="Alice Anvil",
+                    email="alice@acme.example",
+                    usage_location="NL",
+                    aliases=[self.CANARY_MANAGED],
+                    platform_config=PlatformConfig(
+                        github=GitHubUserConfig(handle="alice-acme")
+                    ),
+                ),
+                "bob": User(
+                    name="bob",
+                    display_name="Bob Bracket",
+                    email="bob@acme.example",
+                    managed=False,
+                    aliases=[self.CANARY_EXISTING],
+                    platform_config=PlatformConfig(
+                        github=GitHubUserConfig(handle="bob-acme")
+                    ),
+                ),
+            },
+        )
+
+    def test_no_alias_appears_in_either_tfvars_payload(self):
+        exporter = TerraformExporter(self._config(), github_org_default="acme-corp")
+        entra = json.dumps(exporter.export_entra_tfvars())
+        github = json.dumps(exporter.export_github_tfvars())
+
+        for canary in (self.CANARY_MANAGED, self.CANARY_EXISTING):
+            assert canary not in entra, f"alias {canary} leaked into entra tfvars"
+            assert canary not in github, f"alias {canary} leaked into github tfvars"
+
+    def test_the_users_carrying_those_aliases_are_still_exported(self):
+        # Without this, the assertions above would pass on an empty payload and
+        # stop meaning anything the day the exporter drops users entirely.
+        exporter = TerraformExporter(self._config(), github_org_default="acme-corp")
+        entra = exporter.export_entra_tfvars()
+        assert [u["email"] for u in entra["iam_users_managed"]] == [
+            "alice@acme.example"
+        ]
+        assert [u["email"] for u in entra["iam_users_existing"]] == [
+            "bob@acme.example"
+        ]

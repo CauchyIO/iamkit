@@ -73,11 +73,12 @@ query current state → diff against desired → apply changes.
 
 Exchange is a separate plane because mailbox proxy addresses are writable from
 nowhere else: `azuread_user.proxy_addresses` is computed-only in the Terraform
-provider, Microsoft Graph documents `user.proxyAddresses` as read-only, and no
-public REST admin API exists. The client therefore runs the
-ExchangeOnlineManagement PowerShell module in a one-shot `pwsh` session with
-app-only certificate auth. `pwsh` is a runtime requirement of that executor
-only — importing iamkit does not need it.
+provider, Microsoft Graph documents `user.proxyAddresses` as read-only, and
+Microsoft documents no REST admin API for third-party clients. The client
+therefore runs the ExchangeOnlineManagement PowerShell module in a one-shot
+`pwsh` session with app-only certificate auth. `pwsh` is a runtime requirement
+of `iamkit.clients.exchange` when it is actually called — the executor itself
+never shells out, and importing iamkit does not need it.
 
 ## Key decisions
 

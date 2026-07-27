@@ -9,6 +9,7 @@ the enforcement point for each rule using a tier prefix:
   executor:<module>.<symbol> — a symbol exported by iamkit.executors.<module>
 """
 
+import importlib
 import re
 from pathlib import Path
 
@@ -118,8 +119,6 @@ class TestPrincipleCatalog:
                     )
 
     def test_executor_covers_entries_resolve(self):
-        import importlib
-
         for path in _principle_files():
             fm, _ = _frontmatter_and_body(path)
             for entry in fm["covers"]:

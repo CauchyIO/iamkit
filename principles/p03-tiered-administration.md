@@ -37,16 +37,20 @@ two to four Global Administrators plus excluded break-glass accounts.
   the account — which means a custom Exchange role group with a write scope,
   never the tenant-wide Exchange Administrator directory role. iamkit keeps the
   seam explicit rather than implicit: `executors.exchange.resolve_desired_state`
-  refuses `managed=False` principals unless the caller passes
-  `allow_unmanaged_users=True`.
+  refuses an *enabled* `managed=False` principal that declares aliases unless
+  the caller passes `allow_unmanaged_users=True`. A disabled one is skipped
+  before that check rather than refused, so no addresses are written either
+  way.
 - **Organizational**: break-glass credentials are custodied and tested on a
   calendar, outside this repo and outside the tenant's SSO path.
 
 ## Exceptions
 
 None. An exception to this principle is the incident. The alias seam above is
-a scope clarification, not an exception: that account's existence, its enabled
-state, and its sign-in path remain outside every automation plane.
+a scope clarification, not an exception: no automation plane creates that
+account, disables it, or holds credentials to sign in as it. Conditional
+access may still gate its sign-in — that is IAM-P04's business, and only
+break-glass accounts are excluded there.
 
 ## Tensions
 
