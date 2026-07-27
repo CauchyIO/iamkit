@@ -683,3 +683,33 @@ class TestEmailAddressUniqueness:
         }
         with pytest.raises(ValueError, match="alice@acme.example"):
             IAMConfig(users=users)
+
+    def test_alias_colliding_with_mailing_list_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["team@acme.example"],
+            ),
+        }
+        groups = {
+            "ml-team": MailingList(
+                name="ml-team", email_address="team@acme.example",
+            ),
+        }
+        with pytest.raises(ValueError, match="team@acme.example"):
+            IAMConfig(users=users, groups=groups)
+
+    def test_alias_colliding_with_external_user_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["guest@partner.example"],
+            ),
+        }
+        externals = {
+            "guest": ExternalUser(
+                email="guest@partner.example", display_name="Guest",
+            ),
+        }
+        with pytest.raises(ValueError, match="guest@partner.example"):
+            IAMConfig(users=users, external_users=externals)

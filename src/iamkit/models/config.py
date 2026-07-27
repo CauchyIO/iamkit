@@ -6,7 +6,7 @@ from iamkit.models.base import BaseIdentityModel
 from iamkit.models.access import AccessPolicy, AzureRoleAssignment, GitHubOrgSettings
 from iamkit.models.conditional_access import ConditionalAccessPolicy
 from iamkit.models.enums import PrincipalType
-from iamkit.models.groups import Group
+from iamkit.models.groups import Group, MailingList
 from iamkit.models.license import LicenseSKU
 from iamkit.models.principals import (
     ExternalUser,
@@ -241,6 +241,13 @@ class IAMConfig(BaseIdentityModel):
 
         for mb_key, mb in self.shared_mailboxes.items():
             claim(mb.email_address, f"shared_mailbox '{mb_key}'")
+
+        # Mailing lists are mail-enabled distribution groups — directory objects
+        # holding a primary SMTP address. M365 groups stay out: they declare no
+        # address, Entra derives one from mailNickname at creation time.
+        for group_key, group in self.groups.items():
+            if isinstance(group, MailingList):
+                claim(group.email_address, f"mailing_list '{group_key}'")
 
         for eu_key, eu in self.external_users.items():
             claim(eu.email, f"external_user '{eu_key}'")
