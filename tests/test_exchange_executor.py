@@ -292,6 +292,40 @@ class TestReconciliation:
         assert result.changes == {"add": ["privacy@acme.example"], "remove": []}
         assert client.calls == []
 
+    def test_dry_run_delete_writes_nothing(self):
+        # delete() reaches the write path through update() directly, so it
+        # never passes the base class's create_or_update gate. Without a gate
+        # inside update(), previewing a deprovisioning run deletes every
+        # in-scope alias for real.
+        client = FakeExchangeClient({
+            "alice@acme.example": _mailbox(
+                "privacy@acme.example", "stale@acme.example"
+            )
+        })
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS, dry_run=True)
+        result = ex.delete(_state())
+        assert result.operation == OperationType.DELETE
+        assert result.changes == {
+            "add": [],
+            "remove": ["privacy@acme.example", "stale@acme.example"],
+        }
+        assert client.calls == []
+
+    def test_dry_run_update_called_directly_writes_nothing(self):
+        # The same hole one level up: any caller holding the executor can call
+        # update() without going through create_or_update.
+        client = FakeExchangeClient(
+            {"alice@acme.example": _mailbox("stale@acme.example")}
+        )
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS, dry_run=True)
+        result = ex.update(_state("privacy@acme.example"))
+        assert result.operation == OperationType.UPDATE
+        assert result.changes == {
+            "add": ["privacy@acme.example"],
+            "remove": ["stale@acme.example"],
+        }
+        assert client.calls == []
+
     def test_plan_reports_without_applying(self):
         client = FakeExchangeClient({"alice@acme.example": _mailbox()})
         ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)

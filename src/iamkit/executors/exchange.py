@@ -212,6 +212,19 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                 resource_name=resource.name,
                 message=f"{resource.upn}: aliases already match",
             )
+        # The gate lives here, not only in the base class's create_or_update:
+        # delete() reaches the write through update() directly, so a gate one
+        # level up would leave a dry-run deprovisioning run removing every
+        # in-scope address for real.
+        if self.dry_run:
+            return ExecutionResult(
+                success=True,
+                operation=OperationType.UPDATE,
+                resource_type=self.get_resource_type(),
+                resource_name=resource.name,
+                message=f"{resource.upn}: would apply +{len(add)} -{len(remove)} alias(es)",
+                changes={"add": add, "remove": remove},
+            )
         self.execute_with_retry(
             self._client.set_proxy_addresses, resource.upn, add=add, remove=remove
         )
