@@ -119,6 +119,12 @@ class TestExecutorConstruction:
                 FakeExchangeClient(), managed_domains=["acme.onmicrosoft.com"]
             )
 
+    def test_blank_managed_domain_entry_refused(self):
+        with pytest.raises(ValueError, match="blank entry"):
+            MailboxAliasExecutor(
+                FakeExchangeClient(), managed_domains=["  ", "acme.example"]
+            )
+
 
 class TestReconciliation:
     def test_missing_alias_is_added(self):
@@ -160,6 +166,21 @@ class TestReconciliation:
         assert result.operation == OperationType.NO_OP
         assert client.calls == []
 
+    def test_primary_among_the_secondaries_is_never_removed(self):
+        # An AD-authored proxyAddresses list in a hybrid tenant can carry the
+        # primary's address as a lowercase smtp: entry too. It is not declarable
+        # as an alias, so without an explicit exclusion it lands in the removal
+        # set — the one write this executor exists to prevent.
+        client = FakeExchangeClient({
+            "alice@acme.example": _mailbox(
+                "alice@acme.example", "privacy@acme.example"
+            )
+        })
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        result = ex.create_or_update(_state("privacy@acme.example"))
+        assert result.operation == OperationType.NO_OP
+        assert client.calls == []
+
     def test_alias_on_an_unmanaged_domain_is_left_alone(self):
         client = FakeExchangeClient({
             "alice@acme.example": _mailbox("alice@legacy.example")
@@ -191,6 +212,13 @@ class TestReconciliation:
         with pytest.raises(ExchangeOnlineError, match="No mailbox"):
             ex.plan([_state("privacy@acme.example")])
 
+    def test_dry_run_over_a_missing_mailbox_raises(self):
+        ex = MailboxAliasExecutor(
+            FakeExchangeClient(), managed_domains=DOMAINS, dry_run=True
+        )
+        with pytest.raises(ExchangeOnlineError, match="No mailbox"):
+            ex.create_or_update(_state("privacy@acme.example"))
+
     def test_dry_run_applies_nothing(self):
         client = FakeExchangeClient({"alice@acme.example": _mailbox()})
         ex = MailboxAliasExecutor(client, managed_domains=DOMAINS, dry_run=True)
@@ -206,14 +234,13 @@ class TestReconciliation:
         assert plan.operations[0].operation == OperationType.UPDATE
         assert client.calls == []
 
+    def test_second_pass_over_an_applied_change_is_a_no_op(self):
+        client = StatefulExchangeClient({"alice@acme.example": _mailbox()})
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
 
-def test_second_pass_over_an_applied_change_is_a_no_op():
-    client = StatefulExchangeClient({"alice@acme.example": _mailbox()})
-    ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        first = ex.create_or_update(_state("privacy@acme.example"))
+        second = ex.create_or_update(_state("privacy@acme.example"))
 
-    first = ex.create_or_update(_state("privacy@acme.example"))
-    second = ex.create_or_update(_state("privacy@acme.example"))
-
-    assert first.operation == OperationType.UPDATE
-    assert second.operation == OperationType.NO_OP
-    assert len(client.calls) == 1
+        assert first.operation == OperationType.UPDATE
+        assert second.operation == OperationType.NO_OP
+        assert len(client.calls) == 1

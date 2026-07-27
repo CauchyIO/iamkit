@@ -3,21 +3,30 @@
 Reconciles the `aliases` declared on users onto their Exchange Online
 mailboxes as secondary proxy addresses. The reconciliation is deliberately
 narrow: it can only add and remove lowercase `smtp:` addresses inside a
-declared set of managed domains. The primary address, the .onmicrosoft.com
-routing address, and every non-SMTP entry (SIP, X500, SPO) are structurally
-out of reach.
+declared set of managed domains.
+
+Two of the three exclusions hold locally, whatever the client hands over:
+
+* The primary address cannot be added (declaring it as an alias is refused)
+  and cannot be removed (it is excluded from the removable set even when it
+  also appears among the secondaries, which an AD-authored `proxyAddresses`
+  list in a hybrid tenant can produce).
+* The .onmicrosoft.com routing address cannot be reached because it can
+  never be a managed domain.
+
+The third is inherited rather than local: non-SMTP entries (SIP, X500, SPO)
+are out of reach because `MailboxAddresses.secondary` is documented to hold
+only the stripped lowercase `smtp:` entries, and this module never reads
+past it.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from iamkit.clients.exchange import ExchangeOnlineError, MailboxAddresses
 from iamkit.executors.base import BaseExecutor, ExecutionResult, OperationType
 from iamkit.models.config import IAMConfig
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,13 +87,20 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                 "managed_domains must name at least one domain; an executor with "
                 "no scope would treat every existing alias as removable"
             )
-        normalised = [d.lower().lstrip("@") for d in managed_domains]
-        for domain in normalised:
+        normalised: list[str] = []
+        for raw in managed_domains:
+            domain = raw.strip().lower().lstrip("@")
+            if not domain:
+                raise ValueError(
+                    f"managed_domains contains a blank entry ({raw!r}); every entry "
+                    "must name a domain"
+                )
             if domain.endswith(".onmicrosoft.com"):
                 raise ValueError(
                     f"Refusing to manage '{domain}': the .onmicrosoft.com address "
                     "is Exchange's routing address and must never be reconciled away"
                 )
+            normalised.append(domain)
         self._client = client
         self._domains = frozenset(normalised)
         # One lookup per mailbox per run: plan() calls exists(), _needs_update()
@@ -95,9 +111,13 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         return "mailbox_aliases"
 
     def _current(self, resource: MailboxAliasDesiredState) -> MailboxAddresses | None:
-        if resource.upn not in self._cache:
-            self._cache[resource.upn] = self._client.get_mailbox_addresses(resource.upn)
-        return self._cache[resource.upn]
+        # Keyed on the folded UPN because the client normalises to lowercase
+        # before it queries: without folding, one mailbox reached under two
+        # casings gets two slots and a write invalidates only one of them.
+        key = resource.upn.lower()
+        if key not in self._cache:
+            self._cache[key] = self._client.get_mailbox_addresses(resource.upn)
+        return self._cache[key]
 
     def _diff(
         self, resource: MailboxAliasDesiredState
@@ -125,15 +145,30 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                 )
             desired.add(lowered)
 
+        # The primary is excluded explicitly, not just by virtue of being
+        # undeclarable: if it also appears among the secondaries it is not in
+        # `desired` (declaring it raises above), so it would otherwise fall
+        # straight into the removal set.
         in_scope = {
             address
             for address in current.secondary
-            if address.rpartition("@")[2] in self._domains
+            if address != current.primary
+            and address.rpartition("@")[2] in self._domains
         }
         return sorted(desired - in_scope), sorted(in_scope - desired)
 
     def exists(self, resource: MailboxAliasDesiredState) -> bool:
         return self._current(resource) is not None
+
+    def create_or_update(
+        self, resource: MailboxAliasDesiredState
+    ) -> ExecutionResult:
+        # A missing mailbox, an out-of-scope alias, or an alias equal to the
+        # primary must fail on every path including dry run: the base class
+        # skips _get_changes when exists() is false, so a preview would
+        # otherwise report a benign CREATE that the apply then rejects.
+        self._diff(resource)
+        return super().create_or_update(resource)
 
     def _needs_update(self, resource: MailboxAliasDesiredState) -> bool:
         add, remove = self._diff(resource)
@@ -162,7 +197,7 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         self.execute_with_retry(
             self._client.set_proxy_addresses, resource.upn, add=add, remove=remove
         )
-        self._cache.pop(resource.upn, None)
+        self._cache.pop(resource.upn.lower(), None)
         return ExecutionResult(
             success=True,
             operation=OperationType.UPDATE,
@@ -177,4 +212,9 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         stripped = MailboxAliasDesiredState(
             name=resource.name, upn=resource.upn, aliases=()
         )
-        return self.update(stripped)
+        result = self.update(stripped)
+        if result.operation != OperationType.UPDATE:
+            return result
+        # Relabelled so the audit trail and the plan's glyph read as a removal;
+        # update() is only the mechanism.
+        return result.model_copy(update={"operation": OperationType.DELETE})
