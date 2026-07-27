@@ -70,6 +70,18 @@ def test_get_mailbox_addresses_rejects_mailbox_with_no_primary():
         )
 
 
+def test_parsed_addresses_are_lowercased():
+    payload = {
+        "found": True,
+        "addresses": ["SMTP:Alice@Acme.Example", "smtp:Privacy@Acme.Example"],
+    }
+    result = _client(lambda script: json.dumps(payload)).get_mailbox_addresses(
+        "alice@acme.example"
+    )
+    assert result.primary == "alice@acme.example"
+    assert result.secondary == ("privacy@acme.example",)
+
+
 def test_set_proxy_addresses_builds_add_and_remove():
     scripts = []
 
@@ -96,6 +108,17 @@ def test_set_proxy_addresses_refuses_a_no_op():
         )
 
 
+@pytest.mark.parametrize("field", ["add", "remove"])
+def test_set_proxy_addresses_refuses_malformed_addresses(field):
+    def runner(script: str) -> str:
+        raise AssertionError("runner must not be reached")
+
+    kwargs = {"add": [], "remove": []}
+    kwargs[field] = ["alice@acme.example'; Remove-Mailbox -Identity x #"]
+    with pytest.raises(ValueError, match="Invalid address"):
+        _client(runner).set_proxy_addresses("alice@acme.example", **kwargs)
+
+
 @pytest.mark.parametrize(
     "bad",
     ["alice@acme.example'; Remove-Mailbox -Identity x #", "no-at-sign", "a@b"],
@@ -106,3 +129,20 @@ def test_malformed_addresses_are_refused_before_reaching_pwsh(bad):
 
     with pytest.raises(ValueError, match="Invalid address"):
         _client(runner).get_mailbox_addresses(bad)
+
+
+def test_connect_block_escapes_embedded_quotes():
+    scripts = []
+
+    def runner(script: str) -> str:
+        scripts.append(script)
+        return json.dumps({"found": False})
+
+    ExchangeOnlineClient(
+        app_id="00000000-0000-0000-0000-000000000000",
+        organization="acme'; Remove-Mailbox -Identity alice #",
+        certificate_path="/tmp/cert.pfx",
+        runner=runner,
+    ).get_mailbox_addresses("alice@acme.example")
+
+    assert "-Organization 'acme''; Remove-Mailbox -Identity alice #'" in scripts[0]
