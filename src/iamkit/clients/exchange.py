@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 CERT_PASSWORD_ENV = "IAMKIT_EXO_CERT_PASSWORD"
 
+# Connect-ExchangeOnline is a network handshake; without a ceiling a wedged
+# connect blocks the caller forever with no diagnostic. Generous enough that a
+# slow connect never trips it — TimeoutExpired propagates.
+PWSH_TIMEOUT_SECONDS = 300
+
 # Deliberately strict: every address reaching this module is interpolated into
 # a PowerShell script, so anything that is not plainly an address is refused
 # before it gets near pwsh.
@@ -64,6 +69,12 @@ def _quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _unparseable(identity: str, raw: str) -> ExchangeOnlineError:
+    return ExchangeOnlineError(
+        f"Get-Mailbox returned unparseable output for {identity}: {raw!r}"
+    )
+
+
 def _default_runner(script: str) -> str:
     proc = subprocess.run(
         ["pwsh", "-NoProfile", "-NonInteractive", "-Command", "-"],
@@ -71,6 +82,7 @@ def _default_runner(script: str) -> str:
         capture_output=True,
         text=True,
         check=False,
+        timeout=PWSH_TIMEOUT_SECONDS,
     )
     if proc.returncode != 0:
         raise ExchangeOnlineError(
@@ -119,13 +131,25 @@ class ExchangeOnlineClient:
         return " ".join(parts)
 
     def _script(self, body: str) -> str:
+        # $WarningPreference: ExchangeOnlineManagement emits warnings freely
+        # (deprecation, REST-backend notices) and -ShowBanner:$false does not
+        # cover them. $ErrorActionPreference governs errors only, so if pwsh
+        # routes a warning to stderr, _default_runner's fatal-stderr rule would
+        # turn a benign notice into a raised exception.
+        #
+        # -ErrorAction SilentlyContinue on the disconnect: PowerShell discards
+        # the in-flight exception if finally throws, so a transient disconnect
+        # failure would mask a genuine Set-Mailbox error and surface itself as
+        # the root cause instead.
         return (
             "$ErrorActionPreference = 'Stop'\n"
+            "$WarningPreference = 'SilentlyContinue'\n"
             f"{self._connect_block()}\n"
             "try {\n"
             f"{body}\n"
             "} finally {\n"
-            "    Disconnect-ExchangeOnline -Confirm:$false | Out-Null\n"
+            "    Disconnect-ExchangeOnline -Confirm:$false"
+            " -ErrorAction SilentlyContinue | Out-Null\n"
             "}\n"
         )
 
@@ -148,13 +172,9 @@ class ExchangeOnlineClient:
         try:
             payload = json.loads(raw.strip() or "null")
         except json.JSONDecodeError as exc:
-            raise ExchangeOnlineError(
-                f"Get-Mailbox returned unparseable output for {identity}: {raw!r}"
-            ) from exc
+            raise _unparseable(identity, raw) from exc
         if not isinstance(payload, dict):
-            raise ExchangeOnlineError(
-                f"Get-Mailbox returned unparseable output for {identity}: {raw!r}"
-            )
+            raise _unparseable(identity, raw)
         if not payload.get("found"):
             return None
 
@@ -197,11 +217,13 @@ class ExchangeOnlineClient:
             clauses.append(f"Remove={joined}")
         table = "; ".join(clauses)
 
-        logger.info(
-            "Set-Mailbox %s: add=%s remove=%s", identity, to_add, to_remove
-        )
         body = (
             f"    Set-Mailbox -Identity {_quote(identity)} "
             f"-EmailAddresses @{{{table}}}"
         )
         self._run(self._script(body))
+        # Logged after the call: in an IAM tool the log is the audit trail, so
+        # it records what happened, not what was attempted.
+        logger.info(
+            "Set-Mailbox %s: add=%s remove=%s", identity, to_add, to_remove
+        )

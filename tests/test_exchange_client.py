@@ -1,6 +1,7 @@
 """Tests for the Exchange Online client using a fake pwsh runner."""
 
 import json
+import logging
 
 import pytest
 
@@ -63,6 +64,12 @@ def test_get_mailbox_addresses_rejects_unparseable_output():
         _client(lambda script: "not json").get_mailbox_addresses("alice@acme.example")
 
 
+@pytest.mark.parametrize("payload", ["", "[1,2]"])
+def test_get_mailbox_addresses_rejects_non_dict_payload(payload):
+    with pytest.raises(ExchangeOnlineError, match="unparseable"):
+        _client(lambda script: payload).get_mailbox_addresses("alice@acme.example")
+
+
 def test_get_mailbox_addresses_rejects_mailbox_with_no_primary():
     payload = {"found": True, "addresses": ["smtp:privacy@acme.example"]}
     with pytest.raises(ExchangeOnlineError, match="no primary"):
@@ -92,14 +99,16 @@ def test_set_proxy_addresses_builds_add_and_remove():
 
     _client(runner).set_proxy_addresses(
         "alice@acme.example",
-        add=["support@acme.example"],
+        add=["a@acme.example", "b@acme.example"],
         remove=["old@acme.example"],
     )
 
     script = scripts[0]
     assert "Set-Mailbox" in script
-    assert "Add='smtp:support@acme.example'" in script
-    assert "Remove='smtp:old@acme.example'" in script
+    assert (
+        "-EmailAddresses @{Add='smtp:a@acme.example','smtp:b@acme.example'; "
+        "Remove='smtp:old@acme.example'}"
+    ) in script
 
 
 def test_set_proxy_addresses_refuses_a_no_op():
@@ -175,3 +184,37 @@ def test_certificate_password_clause_omitted_when_unset(monkeypatch):
     _client(runner).get_mailbox_addresses("alice@acme.example")
 
     assert "-CertificatePassword" not in scripts[0]
+
+
+def test_script_silences_warnings_and_shields_the_real_error_from_disconnect():
+    scripts = []
+
+    def runner(script: str) -> str:
+        scripts.append(script)
+        return json.dumps({"found": False})
+
+    _client(runner).get_mailbox_addresses("alice@acme.example")
+
+    assert "$ErrorActionPreference = 'Stop'" in scripts[0]
+    assert "$WarningPreference = 'SilentlyContinue'" in scripts[0]
+    assert (
+        "Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue"
+        in scripts[0]
+    )
+
+
+def test_set_proxy_addresses_logs_the_write_only_after_it_succeeds(caplog):
+    def failing_runner(script: str) -> str:
+        raise ExchangeOnlineError("Set-Mailbox failed")
+
+    with caplog.at_level(logging.INFO, logger="iamkit.clients.exchange"):
+        with pytest.raises(ExchangeOnlineError):
+            _client(failing_runner).set_proxy_addresses(
+                "alice@acme.example", add=["support@acme.example"], remove=[]
+            )
+        assert caplog.records == []
+
+        _client(lambda script: "").set_proxy_addresses(
+            "alice@acme.example", add=["support@acme.example"], remove=[]
+        )
+        assert len(caplog.records) == 1
