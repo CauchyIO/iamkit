@@ -5,23 +5,25 @@ mailboxes as secondary proxy addresses. The reconciliation is deliberately
 narrow: it can only add and remove addresses inside a declared set of
 managed domains.
 
-Two exclusions hold locally, in whatever case the client hands addresses over:
+Three properties hold locally, in whatever case the client hands addresses
+over: every address is folded before it is compared or emitted, so nothing
+below depends on the client having normalised anything.
 
 * The primary address cannot be added (declaring it as an alias is refused)
   and cannot be removed (it is excluded from the removable set even when it
   also appears among the secondaries, which an AD-authored `proxyAddresses`
-  list in a hybrid tenant can produce). Both comparisons case-fold, so
-  neither depends on the client having lowercased anything.
+  list in a hybrid tenant can produce).
 * The .onmicrosoft.com routing address cannot be reached because it can
   never be a managed domain: the executor refuses one at construction, and
   removals are drawn only from addresses whose domain is in that set.
+* A declared alias that is already present is neither re-added nor removed,
+  so a second pass over an applied change is a no-op.
 
-Two further properties are inherited from the client rather than enforced
-here, and are only as true as `iamkit.clients.exchange` makes them:
+Two properties are inherited from `iamkit.clients.exchange` rather than
+enforced here, and are only as true as that module makes them:
 
-* Addresses reach Exchange as lowercase `smtp:` entries — the prefix that
-  marks an address secondary rather than primary, and the lowercasing of the
-  address itself, are both applied by the client, not here.
+* The `smtp:` prefix that marks an address secondary rather than primary is
+  applied by the client; this module emits bare addresses.
 * Non-SMTP entries (SIP, X500, SPO) are out of reach because
   `MailboxAddresses.secondary` is documented to hold only the stripped
   `smtp:` entries, and this module never reads past it.
@@ -145,24 +147,28 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                     f"Alias '{alias}' on '{resource.upn}' is outside the managed "
                     f"domains {sorted(self._domains)}"
                 )
-            if lowered == current.primary.lower():
+            if lowered == current.primary.lower():  # folded on both sides
                 raise ValueError(
                     f"Alias '{alias}' is the primary address of '{resource.upn}'; "
                     "changing the primary is a rename, not an alias"
                 )
             desired.add(lowered)
 
-        # The primary is excluded explicitly, not just by virtue of being
+        # Every current address is folded before it is compared to anything, so
+        # the whole diff is case-insensitive rather than only the parts the
+        # client happens to have normalised. Unfolded, a mixed-case secondary
+        # is both absent from `in_scope` under one casing and present under the
+        # other, which turns a live alias into a remove paired with an add.
+        #
+        # The primary is then excluded explicitly, not just by virtue of being
         # undeclarable: if it also appears among the secondaries it is not in
         # `desired` (declaring it raises above), so it would otherwise fall
-        # straight into the removal set. Both comparisons against the primary
-        # case-fold, so the exclusion is this module's own rather than one
-        # inherited from the client normalising addresses on the way in.
+        # straight into the removal set.
+        primary = current.primary.lower()
         in_scope = {
             address
-            for address in current.secondary
-            if address.lower() != current.primary.lower()
-            and address.rpartition("@")[2] in self._domains
+            for address in (a.lower() for a in current.secondary)
+            if address != primary and address.rpartition("@")[2] in self._domains
         }
         return sorted(desired - in_scope), sorted(in_scope - desired)
 

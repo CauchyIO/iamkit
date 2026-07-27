@@ -45,7 +45,7 @@ two to four Global Administrators plus excluded break-glass accounts.
 ## Exceptions
 
 None. An exception to this principle is the incident. The alias seam above is
-a scope clarification, not an exception: the account's existence, its enabled
+a scope clarification, not an exception: that account's existence, its enabled
 state, and its sign-in path remain outside every automation plane.
 
 ## Tensions

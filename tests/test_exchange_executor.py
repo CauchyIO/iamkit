@@ -211,6 +211,24 @@ class TestReconciliation:
         with pytest.raises(ValueError, match="primary address"):
             ex.create_or_update(_state("alice@acme.example"))
 
+    @pytest.mark.parametrize(
+        "present", ["Privacy@acme.example", "privacy@ACME.example"]
+    )
+    def test_declared_alias_already_present_in_another_case_is_left_alone(
+        self, present
+    ):
+        # Two distinct failure shapes if the set arithmetic does not fold.
+        # Mixed local part: the address passes the domain filter, so it lands
+        # in the removable set under one casing while the declared alias is
+        # missing under the other — a remove of a working address paired with
+        # an add of the same one. Mixed domain: it fails the domain filter
+        # entirely, so it looks absent and is spuriously added.
+        client = FakeExchangeClient({"alice@acme.example": _mailbox(present)})
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        result = ex.create_or_update(_state("privacy@acme.example"))
+        assert result.operation == OperationType.NO_OP
+        assert client.calls == []
+
     def test_alias_on_an_unmanaged_domain_is_left_alone(self):
         client = FakeExchangeClient({
             "alice@acme.example": _mailbox("alice@legacy.example")

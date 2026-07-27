@@ -84,9 +84,10 @@ wire them up.
 
 Aliases are the exception to the Terraform path. `User.aliases` declares
 secondary SMTP addresses; they reconcile through
-`iamkit.executors.exchange.MailboxAliasExecutor`, which drives the
-ExchangeOnlineManagement PowerShell module (`pwsh` required) under app-only
-certificate auth. Grant that app a **custom Exchange role group with a write
+`iamkit.executors.exchange.MailboxAliasExecutor`, which diffs desired against
+current and hands the changes to `iamkit.clients.exchange.ExchangeOnlineClient`
+— that client, not the executor, drives the ExchangeOnlineManagement PowerShell
+module (`pwsh` required) under app-only certificate auth. Grant that app a **custom Exchange role group with a write
 scope** rather than the tenant-wide Exchange Administrator directory role —
 Exchange RBAC for Applications does not cover management cmdlets, so the role
 group is the only way to narrow what the automation can touch.
