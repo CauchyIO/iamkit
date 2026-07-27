@@ -58,9 +58,15 @@ class MailboxAddresses:
     secondary: tuple[str, ...]
 
 
-def _require_address(value: str) -> str:
+def _require_address(value: str, *, origin: str = "address") -> str:
+    """Refuse anything that is not plainly an address, naming where it came from.
+
+    A removal is drawn from what Exchange returned for the mailbox, not from
+    config, so the two sides need different fixes and a bare `Invalid address`
+    leaves the operator guessing which one they are looking at.
+    """
     if not _ADDRESS_RE.fullmatch(value):
-        raise ValueError(f"Invalid address: {value!r}")
+        raise ValueError(f"Invalid {origin}: {value!r}")
     return value.lower()
 
 
@@ -200,8 +206,20 @@ class ExchangeOnlineClient:
     ) -> None:
         """Add and/or remove secondary SMTP addresses on a mailbox."""
         identity = _require_address(upn)
-        to_add = [_require_address(a) for a in add]
-        to_remove = [_require_address(a) for a in remove]
+        to_add = [
+            _require_address(a, origin="address to add (declared in config)")
+            for a in add
+        ]
+        to_remove = [
+            _require_address(
+                a,
+                origin=(
+                    "address to remove (returned by Exchange for this mailbox, "
+                    "not declared in config)"
+                ),
+            )
+            for a in remove
+        ]
         if not to_add and not to_remove:
             raise ValueError(
                 f"set_proxy_addresses called for {identity} with no addresses "

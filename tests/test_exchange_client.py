@@ -130,6 +130,26 @@ def test_set_proxy_addresses_refuses_malformed_addresses(field):
 
 
 @pytest.mark.parametrize(
+    "field,expected",
+    [
+        ("add", "declared in config"),
+        ("remove", "returned by Exchange for this mailbox"),
+    ],
+)
+def test_malformed_address_error_names_the_side_it_came_from(field, expected):
+    # A removal is an address the mailbox already carries, so a malformed one
+    # is Exchange's data, not the operator's config — and the two need
+    # different fixes.
+    def runner(script: str) -> str:
+        raise AssertionError("runner must not be reached")
+
+    kwargs = {"add": [], "remove": []}
+    kwargs[field] = ["X500:/o=ExchangeLabs/ou=Exchange Administrative Group"]
+    with pytest.raises(ValueError, match=expected):
+        _client(runner).set_proxy_addresses("alice@acme.example", **kwargs)
+
+
+@pytest.mark.parametrize(
     "bad",
     ["alice@acme.example'; Remove-Mailbox -Identity x #", "no-at-sign", "a@b"],
 )

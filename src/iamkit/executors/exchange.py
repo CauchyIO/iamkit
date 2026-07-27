@@ -29,14 +29,22 @@ enforced here, and are only as true as that module makes them:
   applied by the client; this module emits bare addresses.
 * Non-SMTP entries (SIP, X500, SPO) are out of reach because
   `MailboxAddresses.secondary` is documented to hold only the stripped
-  `smtp:` entries, and this module never reads past it.
+  `smtp:` entries, and this module never reads past it. `__init__` is
+  annotated `client: ExchangeOnlineClient` so that contract names the type
+  that actually honours it, rather than resting on whatever object a caller
+  happened to pass.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
-from iamkit.clients.exchange import ExchangeOnlineError, MailboxAddresses
+from iamkit.clients.exchange import (
+    ExchangeOnlineClient,
+    ExchangeOnlineError,
+    MailboxAddresses,
+)
 from iamkit.executors.base import BaseExecutor, ExecutionResult, OperationType
 from iamkit.models.config import IAMConfig
 
@@ -88,7 +96,8 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
 
     def __init__(
         self,
-        client,
+        client: ExchangeOnlineClient,
+        *,
         managed_domains: list[str],
         dry_run: bool = False,
         max_retries: int = 3,
@@ -192,7 +201,7 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         add, remove = self._diff(resource)
         return bool(add or remove)
 
-    def _get_changes(self, resource: MailboxAliasDesiredState) -> dict:
+    def _get_changes(self, resource: MailboxAliasDesiredState) -> dict[str, Any]:
         add, remove = self._diff(resource)
         return {"add": add, "remove": remove}
 
