@@ -27,6 +27,19 @@ class FakeExchangeClient:
         self.calls.append((upn, list(add), list(remove)))
 
 
+class StatefulExchangeClient(FakeExchangeClient):
+    """A fake that actually applies its writes, so a second pass sees them."""
+
+    def set_proxy_addresses(self, upn: str, *, add, remove) -> None:
+        super().set_proxy_addresses(upn, add=add, remove=remove)
+        current = self.mailboxes[upn]
+        secondary = [a for a in current.secondary if a not in remove]
+        secondary.extend(add)
+        self.mailboxes[upn] = MailboxAddresses(
+            upn=current.upn, primary=current.primary, secondary=tuple(secondary),
+        )
+
+
 def _mailbox(*secondary: str) -> MailboxAddresses:
     return MailboxAddresses(
         upn="alice@acme.example",
@@ -173,6 +186,11 @@ class TestReconciliation:
         with pytest.raises(ExchangeOnlineError, match="No mailbox"):
             ex.create_or_update(_state("privacy@acme.example"))
 
+    def test_plan_on_a_missing_mailbox_raises_rather_than_proposing_a_create(self):
+        ex = MailboxAliasExecutor(FakeExchangeClient(), managed_domains=DOMAINS)
+        with pytest.raises(ExchangeOnlineError, match="No mailbox"):
+            ex.plan([_state("privacy@acme.example")])
+
     def test_dry_run_applies_nothing(self):
         client = FakeExchangeClient({"alice@acme.example": _mailbox()})
         ex = MailboxAliasExecutor(client, managed_domains=DOMAINS, dry_run=True)
@@ -187,3 +205,15 @@ class TestReconciliation:
         assert len(plan.operations) == 1
         assert plan.operations[0].operation == OperationType.UPDATE
         assert client.calls == []
+
+
+def test_second_pass_over_an_applied_change_is_a_no_op():
+    client = StatefulExchangeClient({"alice@acme.example": _mailbox()})
+    ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+
+    first = ex.create_or_update(_state("privacy@acme.example"))
+    second = ex.create_or_update(_state("privacy@acme.example"))
+
+    assert first.operation == OperationType.UPDATE
+    assert second.operation == OperationType.NO_OP
+    assert len(client.calls) == 1
