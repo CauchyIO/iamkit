@@ -33,8 +33,9 @@ unattributable.
 - **Technical**: `IAMConfig` rejects any name appearing in more than one
   collection, any duplicate GitHub handle, and any **declared** email address
   claimed by more than one principal — primaries, aliases, shared mailboxes,
-  and mailing lists share a single address namespace, because Exchange enforces
-  exactly that across the directory. All three fire at model time, before export.
+  mailing lists, and external users share a single address namespace, because
+  Exchange enforces exactly that across the directory. All three fire at model
+  time, before export.
 - **Organizational**: the namespace is org-wide vocabulary; name allocation
   follows the naming convention (IAM-P07), which keeps collisions structurally
   unlikely (`sg-` groups cannot collide with user mnemonics).

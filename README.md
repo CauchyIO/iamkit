@@ -89,9 +89,12 @@ current and hands the changes to `iamkit.clients.exchange.ExchangeOnlineClient`
 — that client, not the executor, drives the ExchangeOnlineManagement
 PowerShell module (`pwsh` required) under app-only certificate auth. Grant
 that app a **custom Exchange role group with a write scope** rather than the
-tenant-wide Exchange Administrator directory role — Exchange RBAC for
-Applications does not cover management cmdlets, so the role group is the only
-way to narrow what the automation can touch.
+tenant-wide Exchange Administrator directory role. Exchange RBAC for
+Applications covers data-plane roles only — its application roles are Graph and
+EWS permissions (`Mail.Read`, `Calendars.ReadWrite`, `EWS.AccessAsApp` and the
+like), over the Graph and EWS protocols — so it cannot scope a management
+cmdlet such as `Set-Mailbox`. A custom role group carrying a write scope is
+the documented mechanism for narrowing what the automation can touch.
 
 ## Principles and conventions
 

@@ -48,6 +48,11 @@ class User(BaseIdentityModel):
     They are declared here but are NOT applied by Terraform: proxy addresses
     are read-only in both the azuread provider and Microsoft Graph, so they
     reconcile through iamkit.executors.exchange instead.
+
+    That path validates addresses more strictly than this model does, and the
+    ceiling is worth knowing before you declare one: an address whose local
+    part contains an apostrophe (o'brien@acme.example) is valid, is accepted
+    here, and is refused by iamkit.clients.exchange at reconcile time.
     """
 
     name: str
