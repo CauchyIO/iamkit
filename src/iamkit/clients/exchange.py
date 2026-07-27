@@ -1,0 +1,207 @@
+"""Exchange Online admin client — app-only certificate auth over pwsh.
+
+SMTP aliases live on the mailbox as secondary proxy addresses. That property is
+read-only in Microsoft Graph and computed-only in the azuread Terraform
+provider, and Microsoft documents no REST admin API for third-party clients, so
+the only supported write path is the ExchangeOnlineManagement PowerShell
+module. This client shells out to `pwsh`, one connected session per call.
+
+Auth: app-only with a certificate (client secrets are not supported for
+Exchange Online app-only). If the .pfx is password-protected, export the
+password as IAMKIT_EXO_CERT_PASSWORD — it is read inside the PowerShell
+session from the inherited environment and never interpolated into the script
+text or passed on a command line.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+from typing import Callable
+
+logger = logging.getLogger(__name__)
+
+CERT_PASSWORD_ENV = "IAMKIT_EXO_CERT_PASSWORD"
+
+# Deliberately strict: every address reaching this module is interpolated into
+# a PowerShell script, so anything that is not plainly an address is refused
+# before it gets near pwsh.
+_ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
+
+PwshRunner = Callable[[str], str]
+
+
+class ExchangeOnlineError(RuntimeError):
+    """A pwsh or Exchange Online invocation failed."""
+
+
+@dataclass(frozen=True)
+class MailboxAddresses:
+    """The SMTP addresses currently on a mailbox.
+
+    `primary` is the single `SMTP:` (uppercase) entry; `secondary` holds the
+    `smtp:` (lowercase) entries in the order Exchange returned them. Non-SMTP
+    entries (SIP:, X500:, SPO:) are dropped — nothing in iamkit manages them.
+    """
+
+    upn: str
+    primary: str
+    secondary: tuple[str, ...]
+
+
+def _require_address(value: str) -> str:
+    if not _ADDRESS_RE.fullmatch(value):
+        raise ValueError(f"Invalid address: {value!r}")
+    return value.lower()
+
+
+def _quote(value: str) -> str:
+    """Single-quote a value for PowerShell, doubling embedded quotes."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _default_runner(script: str) -> str:
+    proc = subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", "-"],
+        input=script,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ExchangeOnlineError(
+            f"pwsh exited {proc.returncode}\n"
+            f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+        )
+    if proc.stderr.strip():
+        raise ExchangeOnlineError(f"pwsh wrote to stderr:\n{proc.stderr}")
+    return proc.stdout
+
+
+class ExchangeOnlineClient:
+    """Runs Exchange Online admin cmdlets in a one-shot pwsh session.
+
+    Each call connects, runs its cmdlet, and disconnects, so there is no
+    session state to leak between calls — at the cost of paying the
+    Connect-ExchangeOnline handshake every time.
+    """
+
+    def __init__(
+        self,
+        app_id: str,
+        organization: str,
+        certificate_path: str,
+        *,
+        runner: PwshRunner | None = None,
+    ) -> None:
+        self._app_id = app_id
+        self._organization = organization
+        self._certificate_path = certificate_path
+        self._run = runner or _default_runner
+
+    def _connect_block(self) -> str:
+        parts = [
+            "Connect-ExchangeOnline",
+            f"-AppId {_quote(self._app_id)}",
+            f"-Organization {_quote(self._organization)}",
+            f"-CertificateFilePath {_quote(self._certificate_path)}",
+            "-ShowBanner:$false",
+        ]
+        if os.environ.get(CERT_PASSWORD_ENV):
+            parts.append(
+                f"-CertificatePassword (ConvertTo-SecureString "
+                f"-String $env:{CERT_PASSWORD_ENV} -AsPlainText -Force)"
+            )
+        return " ".join(parts)
+
+    def _script(self, body: str) -> str:
+        return (
+            "$ErrorActionPreference = 'Stop'\n"
+            f"{self._connect_block()}\n"
+            "try {\n"
+            f"{body}\n"
+            "} finally {\n"
+            "    Disconnect-ExchangeOnline -Confirm:$false | Out-Null\n"
+            "}\n"
+        )
+
+    def get_mailbox_addresses(self, upn: str) -> MailboxAddresses | None:
+        """Return the mailbox's SMTP addresses, or None if it does not exist."""
+        identity = _require_address(upn)
+        body = (
+            "    try {\n"
+            f"        $mbx = Get-Mailbox -Identity {_quote(identity)}\n"
+            "        @{ found = $true; addresses = @($mbx.EmailAddresses) } |"
+            " ConvertTo-Json -Depth 3 -Compress\n"
+            "    } catch {\n"
+            "        if ($_.FullyQualifiedErrorId -like"
+            " '*ManagementObjectNotFoundException*') {\n"
+            "            @{ found = $false } | ConvertTo-Json -Compress\n"
+            "        } else { throw }\n"
+            "    }"
+        )
+        raw = self._run(self._script(body))
+        try:
+            payload = json.loads(raw.strip() or "null")
+        except json.JSONDecodeError as exc:
+            raise ExchangeOnlineError(
+                f"Get-Mailbox returned unparseable output for {identity}: {raw!r}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ExchangeOnlineError(
+                f"Get-Mailbox returned unparseable output for {identity}: {raw!r}"
+            )
+        if not payload.get("found"):
+            return None
+
+        primary: str | None = None
+        secondary: list[str] = []
+        for entry in payload.get("addresses") or []:
+            prefix, _, address = str(entry).partition(":")
+            if prefix == "SMTP":
+                primary = address.lower()
+            elif prefix == "smtp":
+                secondary.append(address.lower())
+        if primary is None:
+            raise ExchangeOnlineError(
+                f"Mailbox {identity} reports no primary (SMTP:) address; "
+                "refusing to reconcile against an incoherent mailbox"
+            )
+        return MailboxAddresses(
+            upn=identity, primary=primary, secondary=tuple(secondary)
+        )
+
+    def set_proxy_addresses(
+        self, upn: str, *, add: list[str], remove: list[str]
+    ) -> None:
+        """Add and/or remove secondary SMTP addresses on a mailbox."""
+        identity = _require_address(upn)
+        to_add = [_require_address(a) for a in add]
+        to_remove = [_require_address(a) for a in remove]
+        if not to_add and not to_remove:
+            raise ValueError(
+                f"set_proxy_addresses called for {identity} with no addresses "
+                "to add or remove"
+            )
+
+        clauses = []
+        if to_add:
+            joined = ",".join(_quote(f"smtp:{a}") for a in to_add)
+            clauses.append(f"Add={joined}")
+        if to_remove:
+            joined = ",".join(_quote(f"smtp:{a}") for a in to_remove)
+            clauses.append(f"Remove={joined}")
+        table = "; ".join(clauses)
+
+        logger.info(
+            "Set-Mailbox %s: add=%s remove=%s", identity, to_add, to_remove
+        )
+        body = (
+            f"    Set-Mailbox -Identity {_quote(identity)} "
+            f"-EmailAddresses @{{{table}}}"
+        )
+        self._run(self._script(body))
