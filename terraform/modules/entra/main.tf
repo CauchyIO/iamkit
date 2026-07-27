@@ -54,6 +54,15 @@ resource "azuread_user" "managed_users" {
   mail_nickname       = each.key
   password            = random_password.managed_user_initial[each.key].result
 
+  # The initial password is machine-generated and has to be relayed to the joiner
+  # by a human, so it is a shared secret the moment it is handed over. Force a
+  # change at first sign-in so it stops being valid as soon as they use it.
+  #
+  # Applies at create only — force_password_change is in ignore_changes below, so
+  # existing users are untouched and an admin who later clears the flag in the
+  # portal will not be fought by the next apply.
+  force_password_change = true
+
   lifecycle {
     ignore_changes = [
       password,
