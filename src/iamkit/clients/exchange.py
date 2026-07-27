@@ -36,11 +36,12 @@ PWSH_TIMEOUT_SECONDS = 300
 # a PowerShell script, so anything that is not plainly an address is refused
 # before it gets near pwsh. It is narrower than RFC 5321 on purpose, and the
 # ceiling is real rather than theoretical: a local part containing an
-# apostrophe or any other quoted-string character (o'brien@acme.example) is a
-# valid address that this client refuses outright, and reconcile time is where
-# the operator finds that out. Widening it is a separate decision from the
-# injection guard it currently is — it would leave _quote's escaping as the
-# only thing between a config value and the script text.
+# apostrophe or any other character outside this pattern's allowed set
+# (o'brien@acme.example) is a valid, unquoted address that this client
+# refuses outright, and reconcile time is where the operator finds that out.
+# Widening it is a separate decision from the injection guard it currently
+# is — it would leave _quote's escaping as the only thing between a config
+# value and the script text.
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 
 PwshRunner = Callable[[str], str]

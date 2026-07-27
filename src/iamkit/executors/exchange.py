@@ -31,8 +31,7 @@ enforced here, and are only as true as that module makes them:
   `MailboxAddresses.secondary` is documented to hold only the stripped
   `smtp:` entries, and this module never reads past it. `__init__` is
   annotated `client: ExchangeOnlineClient` so that contract names the type
-  that actually honours it, rather than resting on whatever object a caller
-  happened to pass.
+  that actually honours it.
 """
 
 from __future__ import annotations
@@ -102,6 +101,14 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         dry_run: bool = False,
         max_retries: int = 3,
     ) -> None:
+        """Configure the executor's scope.
+
+        `max_retries` is inherited from `BaseExecutor` and stored but unused
+        here: this executor calls the client directly rather than through
+        `execute_with_retry`, because a `Set-Mailbox` address change is not
+        idempotent — see `update()` for why retrying a landed write is
+        never attempted.
+        """
         super().__init__(dry_run=dry_run, max_retries=max_retries)
         if not managed_domains:
             raise ValueError(
@@ -248,8 +255,8 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
         # as transient. Set-Mailbox @{Add=…} errors when the address is already
         # present and @{Remove=…} errors when it is not, so re-issuing a write
         # that already landed turns a success into a hard failure. The pwsh
-        # path has its own PWSH_TIMEOUT_SECONDS ceiling and there is no rate
-        # limit here worth riding out, so retrying buys nothing and costs this.
+        # path has its own PWSH_TIMEOUT_SECONDS ceiling, so retrying buys
+        # nothing and costs this.
         self._client.set_proxy_addresses(resource.upn, add=add, remove=remove)
         return ExecutionResult(
             success=True,
