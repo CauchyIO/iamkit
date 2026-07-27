@@ -212,6 +212,11 @@ class TestReconciliation:
         with pytest.raises(ExchangeOnlineError, match="No mailbox"):
             ex.plan([_state("privacy@acme.example")])
 
+    def test_create_refuses_outright(self):
+        ex = MailboxAliasExecutor(FakeExchangeClient(), managed_domains=DOMAINS)
+        with pytest.raises(ExchangeOnlineError, match="never creates them"):
+            ex.create(_state("privacy@acme.example"))
+
     def test_dry_run_over_a_missing_mailbox_raises(self):
         ex = MailboxAliasExecutor(
             FakeExchangeClient(), managed_domains=DOMAINS, dry_run=True
@@ -244,3 +249,18 @@ class TestReconciliation:
         assert first.operation == OperationType.UPDATE
         assert second.operation == OperationType.NO_OP
         assert len(client.calls) == 1
+
+    def test_delete_removes_only_in_scope_aliases(self):
+        client = FakeExchangeClient({
+            "alice@acme.example": _mailbox(
+                "stale@acme.example",
+                "alice@acme.onmicrosoft.com",
+                "alice@legacy.example",
+            )
+        })
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        result = ex.delete(_state())
+        assert result.operation == OperationType.DELETE
+        assert client.calls == [
+            ("alice@acme.example", [], ["stale@acme.example"])
+        ]
