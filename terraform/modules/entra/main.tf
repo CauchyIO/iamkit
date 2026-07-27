@@ -19,6 +19,29 @@ data "azuread_user" "existing_users" {
 # Managed users — full lifecycle via Terraform
 # -----------------------------------------------------------------------------
 
+# Graph rejects a user create with no passwordProfile ("`password` is required
+# when creating a new user"), so the module must supply one. Generating it here
+# keeps the value out of config and out of anyone's clipboard; retrieve it from
+# the managed_user_initial_passwords output.
+#
+# Existing users are untouched: `password` sits in the azuread_user
+# ignore_changes list, so this only ever applies at create time. `keepers` pins
+# the value to the user key so a password is never silently regenerated.
+resource "random_password" "managed_user_initial" {
+  for_each = { for u in var.iam_users_managed : u.name => u }
+
+  length           = 24
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
+  min_special      = 1
+  override_special = "!@#%^&*-_=+"
+
+  keepers = {
+    user = each.key
+  }
+}
+
 resource "azuread_user" "managed_users" {
   for_each = { for u in var.iam_users_managed : u.name => u }
 
@@ -29,6 +52,16 @@ resource "azuread_user" "managed_users" {
   department          = each.value.department
   job_title           = each.value.job_title
   mail_nickname       = each.key
+  password            = random_password.managed_user_initial[each.key].result
+
+  # The initial password is machine-generated and has to be relayed to the joiner
+  # by a human, so it is a shared secret the moment it is handed over. Force a
+  # change at first sign-in so it stops being valid as soon as they use it.
+  #
+  # Applies at create only — force_password_change is in ignore_changes below, so
+  # existing users are untouched and an admin who later clears the flag in the
+  # portal will not be fought by the next apply.
+  force_password_change = true
 
   lifecycle {
     ignore_changes = [
