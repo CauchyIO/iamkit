@@ -19,6 +19,29 @@ data "azuread_user" "existing_users" {
 # Managed users — full lifecycle via Terraform
 # -----------------------------------------------------------------------------
 
+# Graph rejects a user create with no passwordProfile ("`password` is required
+# when creating a new user"), so the module must supply one. Generating it here
+# keeps the value out of config and out of anyone's clipboard; retrieve it from
+# the managed_user_initial_passwords output.
+#
+# Existing users are untouched: `password` sits in the azuread_user
+# ignore_changes list, so this only ever applies at create time. `keepers` pins
+# the value to the user key so a password is never silently regenerated.
+resource "random_password" "managed_user_initial" {
+  for_each = { for u in var.iam_users_managed : u.name => u }
+
+  length           = 24
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
+  min_special      = 1
+  override_special = "!@#%^&*-_=+"
+
+  keepers = {
+    user = each.key
+  }
+}
+
 resource "azuread_user" "managed_users" {
   for_each = { for u in var.iam_users_managed : u.name => u }
 
@@ -29,6 +52,7 @@ resource "azuread_user" "managed_users" {
   department          = each.value.department
   job_title           = each.value.job_title
   mail_nickname       = each.key
+  password            = random_password.managed_user_initial[each.key].result
 
   lifecycle {
     ignore_changes = [
