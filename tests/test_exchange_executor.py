@@ -345,6 +345,50 @@ class TestReconciliation:
         assert second.operation == OperationType.NO_OP
         assert len(client.calls) == 1
 
+    def test_a_failed_write_is_issued_once_and_not_retried(self):
+        # Set-Mailbox is not idempotent — @{Add=} errors when the address is
+        # already there and @{Remove=} when it is not — and the base class
+        # classifies transience by substring over the whole pwsh output, so
+        # Exchange's own prose ("…timeout") would decide to re-issue it.
+        class FailingClient(FakeExchangeClient):
+            def set_proxy_addresses(self, upn: str, *, add, remove) -> None:
+                super().set_proxy_addresses(upn, add=add, remove=remove)
+                raise ExchangeOnlineError(
+                    "pwsh exited 1\n--- stderr ---\nSet-Mailbox: the operation "
+                    "couldn't be performed. timeout"
+                )
+
+        client = FailingClient({"alice@acme.example": _mailbox()})
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        with pytest.raises(ExchangeOnlineError):
+            ex.update(_state("privacy@acme.example"))
+        assert len(client.calls) == 1
+
+    def test_a_write_that_raises_still_invalidates_the_cache(self):
+        # The write may have landed before the error. Holding pre-write state
+        # for the rest of the run would have every later pass diff against a
+        # mailbox that no longer looks like that.
+        class CountingFailingClient(FakeExchangeClient):
+            def __init__(self, mailboxes) -> None:
+                super().__init__(mailboxes)
+                self.reads = 0
+
+            def get_mailbox_addresses(self, upn: str):
+                self.reads += 1
+                return super().get_mailbox_addresses(upn)
+
+            def set_proxy_addresses(self, upn: str, *, add, remove) -> None:
+                super().set_proxy_addresses(upn, add=add, remove=remove)
+                raise ExchangeOnlineError("Set-Mailbox failed after writing")
+
+        client = CountingFailingClient({"alice@acme.example": _mailbox()})
+        ex = MailboxAliasExecutor(client, managed_domains=DOMAINS)
+        with pytest.raises(ExchangeOnlineError):
+            ex.update(_state("privacy@acme.example"))
+        reads_before = client.reads
+        ex.exists(_state("privacy@acme.example"))
+        assert client.reads == reads_before + 1
+
     def test_delete_removes_only_in_scope_aliases(self):
         client = FakeExchangeClient({
             "alice@acme.example": _mailbox(

@@ -225,10 +225,23 @@ class MailboxAliasExecutor(BaseExecutor[MailboxAliasDesiredState]):
                 message=f"{resource.upn}: would apply +{len(add)} -{len(remove)} alias(es)",
                 changes={"add": add, "remove": remove},
             )
-        self.execute_with_retry(
-            self._client.set_proxy_addresses, resource.upn, add=add, remove=remove
-        )
+        # Invalidated before the write, not after: a write that lands and then
+        # raises would otherwise leave the cache holding pre-write state for
+        # the rest of the run, so every later pass diffs against a mailbox that
+        # no longer looks like that.
         self._cache.pop(resource.upn.lower(), None)
+        # Called directly, not through execute_with_retry. The Linear plane
+        # retries because its client raises httpx.HTTPStatusError, which
+        # _is_transient_error classifies on a status code. Exchange errors
+        # carry the whole pwsh stdout+stderr, so classification falls through
+        # to a substring match over Exchange's own prose — "…couldn't be found.
+        # timeout" and "proxy address smtp:x-503@… is already used" both read
+        # as transient. Set-Mailbox @{Add=…} errors when the address is already
+        # present and @{Remove=…} errors when it is not, so re-issuing a write
+        # that already landed turns a success into a hard failure. The pwsh
+        # path has its own PWSH_TIMEOUT_SECONDS ceiling and there is no rate
+        # limit here worth riding out, so retrying buys nothing and costs this.
+        self._client.set_proxy_addresses(resource.upn, add=add, remove=remove)
         return ExecutionResult(
             success=True,
             operation=OperationType.UPDATE,
