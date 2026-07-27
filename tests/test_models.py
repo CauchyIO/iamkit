@@ -1,6 +1,7 @@
 """Tests for the IAM DSL models using real inventory data from Acme."""
 
 import pytest
+from pydantic import ValidationError
 
 from iamkit.models.enums import (
     CAState,
@@ -199,6 +200,48 @@ class TestUser:
         assert user.job_title is None
         assert user.manager is None
         assert user.usage_location is None
+
+
+class TestUserAliases:
+    def test_aliases_default_empty(self):
+        user = User(name="alice", display_name="Alice", email="alice@acme.example")
+        assert user.aliases == []
+
+    def test_aliases_are_lowercased(self):
+        user = User(
+            name="alice",
+            display_name="Alice",
+            email="alice@acme.example",
+            aliases=["Privacy@Acme.Example"],
+        )
+        assert user.aliases == ["privacy@acme.example"]
+
+    def test_alias_without_at_rejected(self):
+        with pytest.raises(ValidationError):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["not-an-address"],
+            )
+
+    def test_duplicate_alias_rejected(self):
+        with pytest.raises(ValidationError):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["p@acme.example", "P@acme.example"],
+            )
+
+    def test_alias_equal_to_primary_rejected(self):
+        with pytest.raises(ValidationError):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["Alice@acme.example"],
+            )
 
 
 # --- Group model tests ---
