@@ -615,3 +615,58 @@ class TestAccessPolicyReferences:
                     "p": AccessPolicy(name="p", group="sg-ghost"),
                 }
             )
+
+
+class TestEmailAddressUniqueness:
+    def test_alias_colliding_with_another_users_primary_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["bob@acme.example"],
+            ),
+            "bob": User(name="bob", display_name="Bob", email="bob@acme.example"),
+        }
+        with pytest.raises(ValueError, match="bob@acme.example"):
+            IAMConfig(users=users)
+
+    def test_same_alias_on_two_users_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["info@acme.example"],
+            ),
+            "bob": User(
+                name="bob", display_name="Bob", email="bob@acme.example",
+                aliases=["info@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="info@acme.example"):
+            IAMConfig(users=users)
+
+    def test_alias_colliding_with_shared_mailbox_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["info@acme.example"],
+            ),
+        }
+        mailboxes = {
+            "info": SharedMailbox(
+                name="info", email_address="info@acme.example", display_name="Info",
+            ),
+        }
+        with pytest.raises(ValueError, match="info@acme.example"):
+            IAMConfig(users=users, shared_mailboxes=mailboxes)
+
+    def test_distinct_addresses_accepted(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["privacy@acme.example", "support@acme.example"],
+            ),
+        }
+        config = IAMConfig(users=users)
+        assert config.users["alice"].aliases == [
+            "privacy@acme.example",
+            "support@acme.example",
+        ]

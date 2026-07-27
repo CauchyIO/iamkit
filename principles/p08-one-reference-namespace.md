@@ -9,6 +9,7 @@ statement: "A name identifies exactly one object across all principal and group 
 covers:
   - model:namespace_collisions
   - model:github_handles_unique
+  - model:email_addresses_unique
 informs: []
 review:
   owner: catalog maintainer
@@ -30,7 +31,10 @@ unattributable.
 ## Implications
 
 - **Technical**: `IAMConfig` rejects any name appearing in more than one
-  collection and any duplicate GitHub handle at model time, before export.
+  collection, any duplicate GitHub handle, and any email address claimed by
+  more than one principal — primaries, aliases, and shared mailboxes share a
+  single address namespace, because Exchange enforces exactly that across the
+  directory. All three fire at model time, before export.
 - **Organizational**: the namespace is org-wide vocabulary; name allocation
   follows the naming convention (IAM-P07), which keeps collisions structurally
   unlikely (`sg-` groups cannot collide with user mnemonics).
