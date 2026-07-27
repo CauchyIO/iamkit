@@ -5,6 +5,7 @@ import json
 import pytest
 
 from iamkit.clients.exchange import (
+    CERT_PASSWORD_ENV,
     ExchangeOnlineClient,
     ExchangeOnlineError,
     MailboxAddresses,
@@ -146,3 +147,31 @@ def test_connect_block_escapes_embedded_quotes():
     ).get_mailbox_addresses("alice@acme.example")
 
     assert "-Organization 'acme''; Remove-Mailbox -Identity alice #'" in scripts[0]
+
+
+def test_certificate_password_is_referenced_not_interpolated(monkeypatch):
+    monkeypatch.setenv(CERT_PASSWORD_ENV, "s3cr3t-value")
+    scripts = []
+
+    def runner(script: str) -> str:
+        scripts.append(script)
+        return json.dumps({"found": False})
+
+    _client(runner).get_mailbox_addresses("alice@acme.example")
+
+    assert "s3cr3t-value" not in scripts[0]
+    assert f"$env:{CERT_PASSWORD_ENV}" in scripts[0]
+    assert "-CertificatePassword" in scripts[0]
+
+
+def test_certificate_password_clause_omitted_when_unset(monkeypatch):
+    monkeypatch.delenv(CERT_PASSWORD_ENV, raising=False)
+    scripts = []
+
+    def runner(script: str) -> str:
+        scripts.append(script)
+        return json.dumps({"found": False})
+
+    _client(runner).get_mailbox_addresses("alice@acme.example")
+
+    assert "-CertificatePassword" not in scripts[0]
