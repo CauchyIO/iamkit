@@ -20,9 +20,22 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from iamkit.clients.exchange import ExchangeOnlineError, _quote
 
 __all__ = [
+    "AddRoleEntry",
+    "AddSoleMember",
+    "CreateGroup",
+    "CreateRole",
+    "CreateScope",
+    "CreateServicePrincipalPointer",
     "CurrentPosture",
+    "EnableOrgCustomization",
     "ExchangeOnlineError",
     "ExchangeRbacPosture",
+    "PinRoleEntryParameters",
+    "RbacPlan",
+    "RemoveRoleEntry",
+    "SetGroupWriteScope",
+    "StripUndeclaredEntries",
+    "diff",
     "read_script",
 ]
 
@@ -227,3 +240,197 @@ class CurrentPosture:
             group_members=tuple(_as_list(doc["group_members"])),
             authorization=tuple(_as_list(doc["authorization"])),
         )
+
+
+# --- Convergence actions -----------------------------------------------------
+# One frozen dataclass per mutation the reconciler can express. The write
+# script renders from these and nothing else, so this set IS the whitelist.
+
+
+@dataclass(frozen=True)
+class EnableOrgCustomization:
+    pass
+
+
+@dataclass(frozen=True)
+class CreateServicePrincipalPointer:
+    app_id: str
+    object_id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
+class CreateScope:
+    name: str
+    filter: str
+
+
+@dataclass(frozen=True)
+class CreateRole:
+    name: str
+    parent: str
+
+
+@dataclass(frozen=True)
+class StripUndeclaredEntries:
+    role: str
+    keep: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AddRoleEntry:
+    role: str
+    cmdlet: str
+    parameters: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RemoveRoleEntry:
+    role: str
+    cmdlet: str
+
+
+@dataclass(frozen=True)
+class PinRoleEntryParameters:
+    role: str
+    cmdlet: str
+    parameters: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CreateGroup:
+    name: str
+    role: str
+    write_scope: str
+
+
+@dataclass(frozen=True)
+class SetGroupWriteScope:
+    group: str
+    write_scope: str
+
+
+@dataclass(frozen=True)
+class AddSoleMember:
+    group: str
+    member: str
+
+
+@dataclass(frozen=True)
+class RbacPlan:
+    actions: tuple
+    blockers: tuple[str, ...]
+
+    @property
+    def empty(self) -> bool:
+        return not self.actions and not self.blockers
+
+
+def _normalise_filter(value: str) -> str:
+    # Exchange canonicalises stored filters (wrapping parens, casing); compare
+    # the intent, not the tenant's rendering of it.
+    return value.strip().strip("()").strip().casefold()
+
+
+def diff(desired: ExchangeRbacPosture, current: CurrentPosture) -> RbacPlan:
+    """Typed convergence actions in a fixed order.
+
+    Two states are deliberately blockers rather than actions: a scope whose
+    filter points somewhere else (rewriting a scope silently retargets every
+    grant that hangs off it) and a foreign group member (removing a principal
+    is not this reconciler's to do).
+    """
+    actions: list = []
+    blockers: list[str] = []
+
+    if not current.org_customization_enabled:
+        actions.append(EnableOrgCustomization())
+
+    if current.service_principal is None:
+        actions.append(
+            CreateServicePrincipalPointer(
+                app_id=desired.sp_app_id,
+                object_id=desired.sp_object_id,
+                display_name=desired.sp_display_name,
+            )
+        )
+
+    if current.scope is None:
+        actions.append(
+            CreateScope(name=desired.scope_name, filter=desired.restriction_filter)
+        )
+    elif _normalise_filter(current.scope["filter"]) != _normalise_filter(
+        desired.restriction_filter
+    ):
+        blockers.append(
+            f"scope {desired.scope_name} has filter {current.scope['filter']!r},"
+            f" expected {desired.restriction_filter!r}; fix by hand — the"
+            " reconciler does not rewrite scopes"
+        )
+
+    if current.role is None:
+        actions.append(CreateRole(name=desired.role_name, parent=desired.role_parent))
+        actions.append(
+            StripUndeclaredEntries(
+                role=desired.role_name, keep=tuple(desired.role_entries)
+            )
+        )
+        for cmdlet, params in desired.role_entries.items():
+            actions.append(
+                PinRoleEntryParameters(
+                    role=desired.role_name, cmdlet=cmdlet, parameters=params
+                )
+            )
+    else:
+        have = {e["name"]: tuple(e["parameters"]) for e in current.role_entries}
+        for cmdlet in sorted(set(have) - set(desired.role_entries)):
+            actions.append(RemoveRoleEntry(role=desired.role_name, cmdlet=cmdlet))
+        for cmdlet in sorted(set(desired.role_entries) - set(have)):
+            actions.append(
+                AddRoleEntry(
+                    role=desired.role_name,
+                    cmdlet=cmdlet,
+                    parameters=desired.role_entries[cmdlet],
+                )
+            )
+        for cmdlet in sorted(set(desired.role_entries) & set(have)):
+            if set(have[cmdlet]) != set(desired.role_entries[cmdlet]):
+                actions.append(
+                    PinRoleEntryParameters(
+                        role=desired.role_name,
+                        cmdlet=cmdlet,
+                        parameters=desired.role_entries[cmdlet],
+                    )
+                )
+
+    if current.group is None:
+        actions.append(
+            CreateGroup(
+                name=desired.group_name,
+                role=desired.role_name,
+                write_scope=desired.scope_name,
+            )
+        )
+        actions.append(
+            AddSoleMember(group=desired.group_name, member=desired.sp_display_name)
+        )
+    else:
+        if current.group["write_scope"] != desired.scope_name:
+            actions.append(
+                SetGroupWriteScope(
+                    group=desired.group_name, write_scope=desired.scope_name
+                )
+            )
+        extras = [m for m in current.group_members if m != desired.sp_display_name]
+        if extras:
+            blockers.append(
+                f"role group {desired.group_name} has members beyond the automation"
+                f" principal: {', '.join(extras)}; remove them by hand — membership"
+                " removal is not this reconciler's to do"
+            )
+        if desired.sp_display_name not in current.group_members:
+            actions.append(
+                AddSoleMember(group=desired.group_name, member=desired.sp_display_name)
+            )
+
+    return RbacPlan(actions=tuple(actions), blockers=tuple(blockers))
