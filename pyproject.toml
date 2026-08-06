@@ -1,6 +1,6 @@
 [project]
 name = "iamkit"
-version = "0.1.1"
+version = "0.3.0"
 description = "IAM-as-code toolkit: Pydantic DSL for identities, groups and access policies, exported to Terraform (Entra ID, GitHub) and applied by executors (Linear, Exchange Online)."
 readme = "README.md"
 license = { file = "LICENSE" }

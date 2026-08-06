@@ -96,6 +96,16 @@ like), over the Graph and EWS protocols — so it cannot scope a management
 cmdlet such as `Set-Mailbox`. A custom role group carrying a write scope is
 the documented mechanism for narrowing what the automation can touch.
 
+That role group and its neighbours are themselves declared state:
+`iamkit.rbac.exchange.ExchangeRbacPosture` describes the service principal
+pointer, management scope, stripped role with pinned parameters, and role
+group, and `ExchangeRbacReconciler` offers `plan`/`apply` over them. Exchange
+RBAC has no Terraform provider or Graph surface, so the reconciler runs its
+generated scripts in an **interactive admin session** (browser sign-in) — by
+design, never CI: the automation app cannot mint its own permissions, and no
+standing org-admin credential should exist for a bootstrap that happens once.
+`plan` doubles as the drift check and prints what the tenant actually granted.
+
 ## Principles and conventions
 
 [`principles/`](principles/index.md) is the governance baseline: eight
