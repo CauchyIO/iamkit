@@ -12,8 +12,12 @@ can express is a role *entry* on the declared role.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -38,6 +42,9 @@ __all__ = [
     "diff",
     "read_script",
     "write_script",
+    "ExchangeRbacReconciler",
+    "InteractiveRunner",
+    "render_plan",
 ]
 
 # Names travel into -Name/-Identity arguments; a strict shape is the injection
@@ -529,3 +536,117 @@ def write_script(plan: RbacPlan, admin_upn: str) -> str:
         " | Out-Null\n"
         "}\n"
     )
+
+
+InteractiveRunner = Callable[[str], None]
+INTERACTIVE_TIMEOUT_SECONDS = 900  # a browser sign-in involves a human
+
+
+def _interactive_runner(script_path: str) -> None:
+    # Deliberately no capture: Connect-ExchangeOnline drives browser SSO through
+    # the operator's terminal. Results travel via the JSON file, not stdout.
+    proc = subprocess.run(
+        ["pwsh", "-NoProfile", "-File", script_path],
+        check=False,
+        timeout=INTERACTIVE_TIMEOUT_SECONDS,
+    )
+    if proc.returncode != 0:
+        raise ExchangeOnlineError(
+            f"pwsh exited {proc.returncode} running {script_path}; "
+            "the session's own output above is the error detail"
+        )
+
+
+def render_plan(plan: RbacPlan, current: CurrentPosture) -> str:
+    """The operator-facing plan: actions, blockers, and the granted evidence."""
+    lines: list[str] = []
+    if plan.empty:
+        lines.append("zero drift — the tenant matches the declared posture")
+    else:
+        for action in plan.actions:
+            lines.append(f"+ {action!r}")
+        for blocker in plan.blockers:
+            lines.append(f"! {blocker}")
+    lines.append("")
+    lines.append("Evidence — what the tenant actually granted:")
+    if current.role_entries:
+        for entry in current.role_entries:
+            lines.append(f"  {entry['name']}: {', '.join(entry['parameters'])}")
+    else:
+        lines.append("  (no role entries — role absent)")
+    for row in current.authorization:
+        state = "granted" if row.get("granted") else "NOT granted"
+        lines.append(f"  {row.get('role')}: {state}")
+    return "\n".join(lines)
+
+
+class ExchangeRbacReconciler:
+    """plan reads and diffs; apply converges, re-reads, and refuses to lie.
+
+    A non-empty residual after apply raises rather than returns, so a partial
+    convergence can never print as success. The runner seam takes a script
+    *path* (interactive pwsh needs -File), and results travel via state.json
+    in the workdir.
+    """
+
+    def __init__(
+        self,
+        posture: ExchangeRbacPosture,
+        admin_upn: str,
+        *,
+        runner: InteractiveRunner | None = None,
+        workdir: str | None = None,
+    ) -> None:
+        self._posture = posture
+        self._admin_upn = admin_upn
+        self._run = runner or _interactive_runner
+        self._workdir = workdir or tempfile.mkdtemp(prefix="iamkit-rbac-")
+
+    def _path(self, name: str) -> str:
+        return os.path.join(self._workdir, name)
+
+    def read_current(self) -> CurrentPosture:
+        state_path = self._path("state.json")
+        if os.path.exists(state_path):
+            os.remove(state_path)
+        script_path = self._path("read.ps1")
+        with open(script_path, "w") as f:
+            f.write(read_script(self._posture, self._admin_upn, state_path))
+        self._run(script_path)
+        if not os.path.exists(state_path):
+            raise ExchangeOnlineError(
+                f"The read session left no state file at {state_path};"
+                " the session's own output is the error detail"
+            )
+        with open(state_path) as f:
+            return CurrentPosture.from_json_text(f.read())
+
+    def plan(self) -> tuple[RbacPlan, CurrentPosture]:
+        current = self.read_current()
+        return diff(self._posture, current), current
+
+    def apply(self) -> RbacPlan:
+        plan, _ = self.plan()
+        if plan.blockers:
+            raise ExchangeOnlineError(
+                "Refusing to apply a blocked plan: " + "; ".join(plan.blockers)
+            )
+        if not plan.actions:
+            return plan
+        script_path = self._path("write.ps1")
+        with open(script_path, "w") as f:
+            f.write(write_script(plan, self._admin_upn))
+        self._run(script_path)
+        residual, _ = self.plan()
+        if not residual.empty:
+            hint = ""
+            if any(isinstance(a, EnableOrgCustomization) for a in residual.actions):
+                hint = (
+                    " (organization customization can take minutes to propagate;"
+                    " re-run apply once it has)"
+                )
+            raise ExchangeOnlineError(
+                f"apply did not converge; residual actions: {residual.actions!r},"
+                f" blockers: {residual.blockers!r}{hint}"
+            )
+        return residual
