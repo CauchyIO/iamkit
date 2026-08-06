@@ -37,6 +37,7 @@ __all__ = [
     "StripUndeclaredEntries",
     "diff",
     "read_script",
+    "write_script",
 ]
 
 # Names travel into -Name/-Identity arguments; a strict shape is the injection
@@ -434,3 +435,97 @@ def diff(desired: ExchangeRbacPosture, current: CurrentPosture) -> RbacPlan:
             )
 
     return RbacPlan(actions=tuple(actions), blockers=tuple(blockers))
+
+
+def _render_action(action) -> str:
+    """One whitelisted template per action type; the dispatch IS the whitelist."""
+    q = _quote
+    if isinstance(action, EnableOrgCustomization):
+        return "Enable-OrganizationCustomization"
+    if isinstance(action, CreateServicePrincipalPointer):
+        return (
+            f"New-ServicePrincipal -AppId {q(action.app_id)}"
+            f" -ObjectId {q(action.object_id)}"
+            f" -DisplayName {q(action.display_name)}"
+        )
+    if isinstance(action, CreateScope):
+        # The filter embeds single quotes, so it is the one double-quoted
+        # value; the posture validators keep double quotes out of its parts.
+        if '"' in action.filter or "`" in action.filter or "$" in action.filter:
+            raise ExchangeOnlineError(
+                f"Scope filter not renderable in double quotes: {action.filter!r}"
+            )
+        return (
+            f"New-ManagementScope -Name {q(action.name)}"
+            f' -RecipientRestrictionFilter "{action.filter}"'
+        )
+    if isinstance(action, CreateRole):
+        return f"New-ManagementRole -Parent {q(action.parent)} -Name {q(action.name)}"
+    if isinstance(action, StripUndeclaredEntries):
+        keep_list = ", ".join(q(k) for k in action.keep)
+        role_star = q(f"{action.role}\\*")
+        return (
+            f"Get-ManagementRoleEntry {role_star}"
+            f" | Where-Object {{ $_.Name -notin @({keep_list}) }}"
+            f" | ForEach-Object {{ Remove-ManagementRoleEntry"
+            f" -Identity ('{action.role}\\' + $_.Name) -Confirm:$false }}"
+        )
+    if isinstance(action, AddRoleEntry):
+        params = ",".join(q(p) for p in action.parameters)
+        return (
+            f"Add-ManagementRoleEntry -Identity {q(action.role + chr(92) + action.cmdlet)}"
+            f" -Parameters {params}"
+        )
+    if isinstance(action, RemoveRoleEntry):
+        return (
+            f"Remove-ManagementRoleEntry"
+            f" -Identity {q(action.role + chr(92) + action.cmdlet)} -Confirm:$false"
+        )
+    if isinstance(action, PinRoleEntryParameters):
+        params = ",".join(q(p) for p in action.parameters)
+        return (
+            f"Set-ManagementRoleEntry -Identity {q(action.role + chr(92) + action.cmdlet)}"
+            f" -Parameters {params}"
+        )
+    if isinstance(action, CreateGroup):
+        return (
+            f"New-RoleGroup -Name {q(action.name)} -Roles {q(action.role)}"
+            f" -CustomRecipientWriteScope {q(action.write_scope)}"
+        )
+    if isinstance(action, SetGroupWriteScope):
+        return (
+            f"Set-RoleGroup -Identity {q(action.group)}"
+            f" -CustomRecipientWriteScope {q(action.write_scope)}"
+        )
+    if isinstance(action, AddSoleMember):
+        return (
+            f"Add-RoleGroupMember -Identity {q(action.group)}"
+            f" -Member {q(action.member)}"
+        )
+    raise ExchangeOnlineError(f"No template for action {action!r}")
+
+
+def write_script(plan: RbacPlan, admin_upn: str) -> str:
+    """The converging session: plan actions rendered in order, nothing else."""
+    if not _UPN_RE.fullmatch(admin_upn):
+        raise ValueError(f"Invalid admin UPN: {admin_upn!r}")
+    if plan.blockers:
+        raise ExchangeOnlineError(
+            "Refusing to render a write script for a blocked plan: "
+            + "; ".join(plan.blockers)
+        )
+    if not plan.actions:
+        raise ExchangeOnlineError("Refusing to render a write script for an empty plan")
+    body = "\n".join(f"    {_render_action(a)}" for a in plan.actions)
+    return (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$WarningPreference = 'SilentlyContinue'\n"
+        f"Connect-ExchangeOnline -UserPrincipalName {_quote(admin_upn)}"
+        " -ShowBanner:$false\n"
+        "try {\n"
+        f"{body}\n"
+        "} finally {\n"
+        "    Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue"
+        " | Out-Null\n"
+        "}\n"
+    )
