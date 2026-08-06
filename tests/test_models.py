@@ -1,6 +1,7 @@
 """Tests for the IAM DSL models using real inventory data from Acme."""
 
 import pytest
+from pydantic import ValidationError
 
 from iamkit.models.enums import (
     CAState,
@@ -199,6 +200,48 @@ class TestUser:
         assert user.job_title is None
         assert user.manager is None
         assert user.usage_location is None
+
+
+class TestUserAliases:
+    def test_aliases_default_empty(self):
+        user = User(name="alice", display_name="Alice", email="alice@acme.example")
+        assert user.aliases == []
+
+    def test_aliases_are_lowercased(self):
+        user = User(
+            name="alice",
+            display_name="Alice",
+            email="alice@acme.example",
+            aliases=["Privacy@Acme.Example"],
+        )
+        assert user.aliases == ["privacy@acme.example"]
+
+    def test_alias_without_at_rejected(self):
+        with pytest.raises(ValidationError, match="Invalid alias"):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["not-an-address"],
+            )
+
+    def test_duplicate_alias_rejected(self):
+        with pytest.raises(ValidationError, match="Duplicate alias"):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["p@acme.example", "P@acme.example"],
+            )
+
+    def test_alias_equal_to_primary_rejected(self):
+        with pytest.raises(ValidationError, match="duplicates the primary address"):
+            User(
+                name="alice",
+                display_name="Alice",
+                email="alice@acme.example",
+                aliases=["Alice@acme.example"],
+            )
 
 
 # --- Group model tests ---
@@ -572,3 +615,101 @@ class TestAccessPolicyReferences:
                     "p": AccessPolicy(name="p", group="sg-ghost"),
                 }
             )
+
+
+class TestEmailAddressUniqueness:
+    def test_alias_colliding_with_another_users_primary_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["bob@acme.example"],
+            ),
+            "bob": User(name="bob", display_name="Bob", email="bob@acme.example"),
+        }
+        with pytest.raises(ValueError, match="bob@acme.example"):
+            IAMConfig(users=users)
+
+    def test_same_alias_on_two_users_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["info@acme.example"],
+            ),
+            "bob": User(
+                name="bob", display_name="Bob", email="bob@acme.example",
+                aliases=["info@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="info@acme.example"):
+            IAMConfig(users=users)
+
+    def test_alias_colliding_with_shared_mailbox_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["info@acme.example"],
+            ),
+        }
+        mailboxes = {
+            "info": SharedMailbox(
+                name="info", email_address="info@acme.example", display_name="Info",
+            ),
+        }
+        with pytest.raises(ValueError, match="info@acme.example"):
+            IAMConfig(users=users, shared_mailboxes=mailboxes)
+
+    def test_distinct_addresses_accepted(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["privacy@acme.example", "support@acme.example"],
+            ),
+        }
+        config = IAMConfig(users=users)
+        assert config.users["alice"].aliases == [
+            "privacy@acme.example",
+            "support@acme.example",
+        ]
+
+    def test_mixed_case_primary_collides_with_lowercase_alias(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="Alice@Acme.Example",
+            ),
+            "bob": User(
+                name="bob", display_name="Bob", email="bob@acme.example",
+                aliases=["alice@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="alice@acme.example"):
+            IAMConfig(users=users)
+
+    def test_alias_colliding_with_mailing_list_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["team@acme.example"],
+            ),
+        }
+        groups = {
+            "ml-team": MailingList(
+                name="ml-team", email_address="team@acme.example",
+            ),
+        }
+        with pytest.raises(ValueError, match="team@acme.example"):
+            IAMConfig(users=users, groups=groups)
+
+    def test_alias_colliding_with_external_user_rejected(self):
+        users = {
+            "alice": User(
+                name="alice", display_name="Alice", email="alice@acme.example",
+                aliases=["guest@partner.example"],
+            ),
+        }
+        externals = {
+            "guest": ExternalUser(
+                email="guest@partner.example", display_name="Guest",
+            ),
+        }
+        with pytest.raises(ValueError, match="guest@partner.example"):
+            IAMConfig(users=users, external_users=externals)

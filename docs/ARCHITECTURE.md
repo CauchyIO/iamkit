@@ -68,6 +68,17 @@ query current state → diff against desired → apply changes.
 
 - **Linear** — `iamkit.executors.linear`: workspace membership, team assignment,
   role management via the GraphQL API
+- **Exchange Online** — `iamkit.executors.exchange`: secondary SMTP addresses
+  (aliases) on existing mailboxes, via `iamkit.clients.exchange`
+
+Exchange is a separate plane because mailbox proxy addresses are writable from
+nowhere else: `azuread_user.proxy_addresses` is computed-only in the Terraform
+provider, Microsoft Graph documents `user.proxyAddresses` as read-only, and
+Microsoft documents no REST admin API for third-party clients. The client
+therefore runs the ExchangeOnlineManagement PowerShell module in a one-shot
+`pwsh` session with app-only certificate auth. `pwsh` is a runtime requirement
+of `iamkit.clients.exchange` when it is actually called — the executor itself
+never shells out, and importing iamkit does not need it.
 
 ## Key decisions
 
@@ -77,3 +88,5 @@ query current state → diff against desired → apply changes.
   never created or destroyed.
 - **Exports are deterministic** — same config in, byte-identical tfvars out, so
   diffs in CI are meaningful.
+- **Aliases are declared, then reconciled — never exported.** `User.aliases`
+  never reaches tfvars, because no Terraform provider can write them.

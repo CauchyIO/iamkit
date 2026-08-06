@@ -6,7 +6,7 @@ from iamkit.models.base import BaseIdentityModel
 from iamkit.models.access import AccessPolicy, AzureRoleAssignment, GitHubOrgSettings
 from iamkit.models.conditional_access import ConditionalAccessPolicy
 from iamkit.models.enums import PrincipalType
-from iamkit.models.groups import Group
+from iamkit.models.groups import Group, MailingList
 from iamkit.models.license import LicenseSKU
 from iamkit.models.principals import (
     ExternalUser,
@@ -56,6 +56,7 @@ class IAMConfig(BaseIdentityModel):
         errors.extend(self._validate_circular_nesting())
         errors.extend(self._validate_license_groups())
         errors.extend(self._validate_github_handles_unique())
+        errors.extend(self._validate_email_addresses_unique())
         errors.extend(self._validate_manager_references())
         errors.extend(self._validate_ca_policy_references())
         errors.extend(self._validate_shared_mailbox_delegates())
@@ -215,6 +216,42 @@ class IAMConfig(BaseIdentityModel):
                 )
             else:
                 handles[gh.handle] = user_key
+        return errors
+
+    def _validate_email_addresses_unique(self) -> list[str]:
+        # IAM-P08 at the address level: Exchange enforces proxy-address
+        # uniqueness across every directory object, so a collision declared
+        # here is an apply-time failure we can catch at model time instead.
+        errors: list[str] = []
+        owner: dict[str, str] = {}
+
+        def claim(address: str, holder: str) -> None:
+            key = address.lower()
+            if key in owner:
+                errors.append(
+                    f"Email address '{key}' is claimed by both {owner[key]} and {holder}"
+                )
+            else:
+                owner[key] = holder
+
+        for user_key, user in self.users.items():
+            claim(user.email, f"user '{user_key}' (primary)")
+            for alias in user.aliases:
+                claim(alias, f"user '{user_key}' (alias)")
+
+        for mb_key, mb in self.shared_mailboxes.items():
+            claim(mb.email_address, f"shared_mailbox '{mb_key}'")
+
+        # Mailing lists are mail-enabled distribution groups — directory objects
+        # holding a primary SMTP address. M365 groups stay out: they declare no
+        # address, Entra derives one from mailNickname at creation time.
+        for group_key, group in self.groups.items():
+            if isinstance(group, MailingList):
+                claim(group.email_address, f"mailing_list '{group_key}'")
+
+        for eu_key, eu in self.external_users.items():
+            claim(eu.email, f"external_user '{eu_key}'")
+
         return errors
 
     def _validate_manager_references(self) -> list[str]:

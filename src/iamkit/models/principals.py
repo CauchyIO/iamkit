@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 from iamkit.models.base import BaseIdentityModel, IdentityMapping
 from iamkit.models.enums import (
@@ -43,6 +43,16 @@ class User(BaseIdentityModel):
 
     The canonical identity is the Entra UPN (email). Platform-specific
     identities (GitHub handle, Linear email) live in platform_config.
+
+    `aliases` are secondary SMTP addresses that route to this user's mailbox.
+    They are declared here but are NOT applied by Terraform: proxy addresses
+    are read-only in both the azuread provider and Microsoft Graph, so they
+    reconcile through iamkit.executors.exchange instead.
+
+    That path validates addresses more strictly than this model does, and the
+    ceiling is worth knowing before you declare one: an address whose local
+    part contains an apostrophe (o'brien@acme.example) is valid, is accepted
+    here, and is refused by iamkit.clients.exchange at reconcile time.
     """
 
     name: str
@@ -55,6 +65,7 @@ class User(BaseIdentityModel):
     account_enabled: bool = True
     managed: bool = True
     platform_config: PlatformConfig = PlatformConfig()
+    aliases: list[str] = []
     group_memberships: list[str] = []
 
     @field_validator("email")
@@ -63,6 +74,28 @@ class User(BaseIdentityModel):
         if "@" not in v:
             raise ValueError(f"Invalid email: {v}")
         return v
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, v: list[str]) -> list[str]:
+        normalised: list[str] = []
+        for alias in v:
+            if "@" not in alias:
+                raise ValueError(f"Invalid alias: {alias}")
+            lowered = alias.lower()
+            if lowered in normalised:
+                raise ValueError(f"Duplicate alias: {alias}")
+            normalised.append(lowered)
+        return normalised
+
+    @model_validator(mode="after")
+    def validate_alias_not_primary(self) -> User:
+        if self.email.lower() in self.aliases:
+            raise ValueError(
+                f"Alias '{self.email}' duplicates the primary address of user "
+                f"'{self.name}'; changing the primary address is a rename, not an alias"
+            )
+        return self
 
     @property
     def identity_mapping(self) -> IdentityMapping:

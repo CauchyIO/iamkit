@@ -3,11 +3,13 @@
 Every principle carries machine-readable frontmatter; `covers:` entries name
 the enforcement point for each rule using a tier prefix:
 
-  convention:<rule>   — a rule name registered in create_default_registry()
-  model:<validator>   — an IAMConfig._validate_<validator> method
-  terraform:<guard>   — an identifier present in a terraform module main.tf
+  convention:<rule>          — a rule name registered in create_default_registry()
+  model:<validator>          — an IAMConfig._validate_<validator> method
+  terraform:<guard>          — an identifier present in a terraform module main.tf
+  executor:<module>.<symbol> — a symbol exported by iamkit.executors.<module>
 """
 
+import importlib
 import re
 from pathlib import Path
 
@@ -109,10 +111,26 @@ class TestPrincipleCatalog:
                         f"{path.name} covers terraform guard '{name}' "
                         "not found in any module main.tf"
                     )
+                elif tier == "executor":
+                    pass  # shape checked by test_executor_covers_entries_resolve
                 else:
                     raise AssertionError(
                         f"{path.name} covers entry '{entry}' has unknown tier '{tier}'"
                     )
+
+    def test_executor_covers_entries_resolve(self):
+        for path in _principle_files():
+            fm, _ = _frontmatter_and_body(path)
+            for entry in fm["covers"]:
+                if not entry.startswith("executor:"):
+                    continue
+                target = entry.removeprefix("executor:")
+                module_name, _, symbol = target.rpartition(".")
+                assert module_name, f"{path.name} covers entry '{entry}' has no module"
+                module = importlib.import_module(f"iamkit.executors.{module_name}")
+                assert hasattr(module, symbol), (
+                    f"{path.name} covers unknown executor symbol '{target}'"
+                )
 
     def test_index_links_every_principle(self):
         index = PRINCIPLES_DIR / "index.md"
