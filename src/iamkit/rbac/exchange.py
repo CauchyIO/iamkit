@@ -173,8 +173,12 @@ def read_script(posture: ExchangeRbacPosture, admin_upn: str, json_path: str) ->
         "    $assignment = $null\n"
         "    $members = @()\n"
         "    if ($group) {\n"
+        # -RoleAssignee and -Role together answer nothing in Exchange Online;
+        # list the assignee's assignments and pick the role's in PowerShell.
         f"        $assignment = Get-ManagementRoleAssignment -RoleAssignee {q(posture.group_name)}"
-        f" -Role {q(posture.role_name)} -ErrorAction SilentlyContinue | Select-Object -First 1\n"
+        " -ErrorAction SilentlyContinue | Where-Object { [string]$_.Role -eq"
+        f" {q(posture.role_name)} -or ([string]$_.Role).EndsWith({q(chr(92) + posture.role_name)}) }}"
+        " | Select-Object -First 1\n"
         f"        $members = @(Get-RoleGroupMember {q(posture.group_name)}"
         " | ForEach-Object { if ($_.DisplayName) { [string]$_.DisplayName } else { [string]$_.Name } })\n"
         "    }\n"
