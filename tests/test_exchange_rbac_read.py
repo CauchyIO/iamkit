@@ -91,3 +91,11 @@ def test_parser_normalises_powershell_single_element_collapse():
 def test_parser_raises_with_context_on_bad_documents(bad):
     with pytest.raises(ExchangeOnlineError):
         CurrentPosture.from_json_text(bad)
+
+
+def test_read_script_takes_the_write_scope_from_the_role_assignment():
+    script = read_script(make_posture(), "admin@tenant.example", "/tmp/state.json")
+    assert "Get-ManagementRoleAssignment -RoleAssignee 'alias-automation' -Role 'alias-writer'" in script
+    assert "$assignment.CustomRecipientWriteScope" in script
+    assert "$group.CustomRecipientWriteScope" not in script
+    assert "if ($_.DisplayName) { [string]$_.DisplayName } else { [string]$_.Name }" in script

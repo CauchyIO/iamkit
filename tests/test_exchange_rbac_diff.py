@@ -156,3 +156,12 @@ def test_missing_member_is_added():
     assert plan.actions == (
         AddSoleMember(group="alias-automation", member="tenant alias automation"),
     )
+
+
+def test_member_reported_by_object_id_or_app_id_is_the_principal():
+    # Get-RoleGroupMember names a service principal by its object id in Name;
+    # the read prefers DisplayName, but either identifier must count as the app.
+    for reported in ("ff9f2c3e-d6dc-44fb-a8c1-147728ef5aa7", "024DB853-E770-44AD-8875-C335A45E7C10"):
+        doc = converged_doc()
+        doc["group_members"] = [reported]
+        assert diff(make_posture(), current(doc)).empty, reported

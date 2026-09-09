@@ -166,10 +166,17 @@ def read_script(posture: ExchangeRbacPosture, admin_upn: str, json_path: str) ->
         "    }\n"
         f"    $group = Get-RoleGroup {q(posture.group_name)}"
         " -ErrorAction SilentlyContinue\n"
+        # A role group carries no scope of its own: the write scope sits on the
+        # assignment that binds the role to the group, so that is what is read.
+        # A service-principal member reports its object id as Name and the
+        # human-readable name as DisplayName; prefer the latter for the diff.
+        "    $assignment = $null\n"
         "    $members = @()\n"
         "    if ($group) {\n"
+        f"        $assignment = Get-ManagementRoleAssignment -RoleAssignee {q(posture.group_name)}"
+        f" -Role {q(posture.role_name)} -ErrorAction SilentlyContinue | Select-Object -First 1\n"
         f"        $members = @(Get-RoleGroupMember {q(posture.group_name)}"
-        " | ForEach-Object { $_.Name })\n"
+        " | ForEach-Object { if ($_.DisplayName) { [string]$_.DisplayName } else { [string]$_.Name } })\n"
         "    }\n"
         "    $auth = @()\n"
         "    if ($sp) {\n"
@@ -187,7 +194,7 @@ def read_script(posture: ExchangeRbacPosture, admin_upn: str, json_path: str) ->
         "        role = if ($role) { @{ name = [string]$role.Name } } else { $null }\n"
         "        role_entries = $entries\n"
         "        group = if ($group) { @{ name = [string]$group.Name;"
-        " write_scope = [string]$group.CustomRecipientWriteScope } } else { $null }\n"
+        " write_scope = [string]$assignment.CustomRecipientWriteScope } } else { $null }\n"
         "        group_members = $members\n"
         "        authorization = $auth\n"
         f"    }} | ConvertTo-Json -Depth 5 | Set-Content -Path {q(json_path)}"
@@ -429,14 +436,22 @@ def diff(desired: ExchangeRbacPosture, current: CurrentPosture) -> RbacPlan:
                     group=desired.group_name, write_scope=desired.scope_name
                 )
             )
-        extras = [m for m in current.group_members if m != desired.sp_display_name]
+        # Exchange names a service-principal member by whichever identifier the
+        # cmdlet surfaces (display name, object id, app id), so all three count.
+        principal_ids = {
+            desired.sp_display_name.casefold(),
+            desired.sp_object_id.casefold(),
+            desired.sp_app_id.casefold(),
+        }
+        is_principal = [m.casefold() in principal_ids for m in current.group_members]
+        extras = [m for m, ok in zip(current.group_members, is_principal) if not ok]
         if extras:
             blockers.append(
                 f"role group {desired.group_name} has members beyond the automation"
                 f" principal: {', '.join(extras)}; remove them by hand — membership"
                 " removal is not this reconciler's to do"
             )
-        if desired.sp_display_name not in current.group_members:
+        if not any(is_principal):
             actions.append(
                 AddSoleMember(group=desired.group_name, member=desired.sp_display_name)
             )
