@@ -200,6 +200,43 @@ class TestGithubExportContract:
         ).export_github_tfvars()
         assert result["github_org"] == "acme-corp"
 
+    def test_github_org_uses_the_login_not_the_display_name(self):
+        # An org whose display name is not a valid login: `owner` on the github
+        # provider is the login, while github_organization_settings.name is the
+        # display name. Collapsing the two points Terraform at a nonexistent org.
+        config = IAMConfig(
+            github_org_settings=GitHubOrgSettings(
+                name="Acme", login="acme-corp",
+                billing_email="billing@acme.example",
+            )
+        )
+        result = TerraformExporter(config).export_github_tfvars()
+        assert result["github_org"] == "acme-corp"
+        assert result["github_org_settings"]["name"] == "Acme"
+
+    def test_exporter_default_is_used_when_org_settings_have_no_login(self):
+        config = IAMConfig(
+            github_org_settings=GitHubOrgSettings(
+                name="Acme", billing_email="billing@acme.example",
+            )
+        )
+        result = TerraformExporter(
+            config, github_org_default="acme-corp"
+        ).export_github_tfvars()
+        assert result["github_org"] == "acme-corp"
+
+    def test_explicit_login_beats_the_exporter_default(self):
+        config = IAMConfig(
+            github_org_settings=GitHubOrgSettings(
+                name="Acme", login="acme-corp",
+                billing_email="billing@acme.example",
+            )
+        )
+        result = TerraformExporter(
+            config, github_org_default="wrong-org"
+        ).export_github_tfvars()
+        assert result["github_org"] == "acme-corp"
+
     def test_team_members_deduped(self):
         config = IAMConfig(
             users={

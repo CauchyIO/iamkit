@@ -368,10 +368,15 @@ class TerraformExporter:
             "github_members": members,
             "github_teams": teams,
         }
+        # The provider's `owner` is the org LOGIN, not its display name. Prefer
+        # an explicit login, then the caller's default, and only fall back to
+        # the display name for orgs where the two coincide. Reading `name` first
+        # pointed Terraform at an org that does not exist wherever they differ.
+        settings = self.config.github_org_settings
         org_name = (
-            self.config.github_org_settings.name
-            if self.config.github_org_settings is not None
-            else self.github_org_default
+            (settings.login if settings is not None else None)
+            or self.github_org_default
+            or (settings.name if settings is not None else None)
         )
         if org_name is not None:
             result["github_org"] = org_name
