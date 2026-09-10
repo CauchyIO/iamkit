@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Callable
 
@@ -45,6 +46,10 @@ PWSH_TIMEOUT_SECONDS = 300
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 
 PwshRunner = Callable[[str], str]
+
+
+def _private_opener(path: str, flags: int) -> int:
+    return os.open(path, flags, 0o600)
 
 
 class ExchangeOnlineError(RuntimeError):
@@ -89,14 +94,23 @@ def _unparseable(identity: str, raw: str) -> ExchangeOnlineError:
 
 
 def _default_runner(script: str) -> str:
-    proc = subprocess.run(
-        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", "-"],
-        input=script,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=PWSH_TIMEOUT_SECONDS,
-    )
+    # -File, never `-Command -`: fed over stdin, the console host reads the
+    # script line by line and writes cursor-mode sequences (\e[?1h, \e[?1l)
+    # to stdout around each line; on a Linux CI runner they were all that
+    # came back, and the caller parses stdout as JSON. The file holds no
+    # secret (the certificate password stays in the environment), but it
+    # names the certificate path and app id, so it is private and short-lived.
+    with tempfile.TemporaryDirectory(prefix="iamkit-exo-") as workdir:
+        script_path = os.path.join(workdir, "call.ps1")
+        with open(script_path, "w", encoding="utf-8", opener=_private_opener) as fh:
+            fh.write(script)
+        proc = subprocess.run(
+            ["pwsh", "-NoProfile", "-NonInteractive", "-File", script_path],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PWSH_TIMEOUT_SECONDS,
+        )
     if proc.returncode != 0:
         raise ExchangeOnlineError(
             f"pwsh exited {proc.returncode}\n"
@@ -249,6 +263,4 @@ class ExchangeOnlineClient:
         self._run(self._script(body))
         # Logged after the call: in an IAM tool the log is the audit trail, so
         # it records what happened, not what was attempted.
-        logger.info(
-            "Set-Mailbox %s: add=%s remove=%s", identity, to_add, to_remove
-        )
+        logger.info("Set-Mailbox %s: add=%s remove=%s", identity, to_add, to_remove)

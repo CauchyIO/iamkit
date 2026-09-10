@@ -2,6 +2,7 @@
 
 import json
 import logging
+import shutil
 
 import pytest
 
@@ -10,6 +11,7 @@ from iamkit.clients.exchange import (
     ExchangeOnlineClient,
     ExchangeOnlineError,
     MailboxAddresses,
+    _default_runner,
 )
 
 EXISTING_MAILBOX = {
@@ -238,3 +240,14 @@ def test_set_proxy_addresses_logs_the_write_only_after_it_succeeds(caplog):
             "alice@acme.example", add=["support@acme.example"], remove=[]
         )
         assert len(caplog.records) == 1
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="pwsh not installed")
+def test_default_runner_returns_only_the_script_output():
+    # Real pwsh, no Exchange. Feeding the script over stdin (-Command -) makes
+    # the console host wrap every line in cursor-mode sequences, and on a CI
+    # runner it swallowed the JSON entirely; the client parses stdout as JSON,
+    # so stdout has to be exactly what the script wrote.
+    raw = _default_runner("@{ found = $true; n = 1 } | ConvertTo-Json -Compress\n")
+    assert json.loads(raw) == {"found": True, "n": 1}
+    assert "\x1b" not in raw
