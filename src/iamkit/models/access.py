@@ -5,9 +5,17 @@ from iamkit.models.enums import GitHubBasePermission, LinearRole, PermissionLeve
 
 
 class GitHubOrgSettings(BaseIdentityModel):
-    """Organization-level GitHub settings."""
+    """Organization-level GitHub settings.
+
+    `name` is the org's display name — what `github_organization_settings`
+    renders. `login` is the org's URL slug, which is what the github provider's
+    `owner` and every org-scoped API call need. They are the same string for
+    many orgs and different for some, so `login` is optional and only has to be
+    set when they diverge.
+    """
 
     name: str
+    login: str | None = None
     billing_email: str
     email: str | None = None
     blog: str | None = None
