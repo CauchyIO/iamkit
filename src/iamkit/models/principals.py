@@ -10,6 +10,24 @@ from iamkit.models.enums import (
 )
 
 
+def _normalise_aliases(aliases: list[str]) -> list[str]:
+    """Fold declared aliases to lowercase, rejecting non-addresses and repeats.
+
+    Shared by `User` and `SharedMailbox`: both feed the same reconciler, so a
+    difference in how they normalise would be a difference in what the diff
+    considers already present.
+    """
+    normalised: list[str] = []
+    for alias in aliases:
+        if "@" not in alias:
+            raise ValueError(f"Invalid alias: {alias}")
+        lowered = alias.lower()
+        if lowered in normalised:
+            raise ValueError(f"Duplicate alias: {alias}")
+        normalised.append(lowered)
+    return normalised
+
+
 class GitHubUserConfig(BaseIdentityModel):
     """GitHub-specific configuration for a user."""
 
@@ -78,15 +96,7 @@ class User(BaseIdentityModel):
     @field_validator("aliases")
     @classmethod
     def validate_aliases(cls, v: list[str]) -> list[str]:
-        normalised: list[str] = []
-        for alias in v:
-            if "@" not in alias:
-                raise ValueError(f"Invalid alias: {alias}")
-            lowered = alias.lower()
-            if lowered in normalised:
-                raise ValueError(f"Duplicate alias: {alias}")
-            normalised.append(lowered)
-        return normalised
+        return _normalise_aliases(v)
 
     @model_validator(mode="after")
     def validate_alias_not_primary(self) -> User:
@@ -142,12 +152,19 @@ class SharedMailbox(BaseIdentityModel):
     """A shared mailbox — a single address that delegates can send-as/access.
 
     Created via Graph API (not Exchange PowerShell).
+
+    `aliases` carry the same contract as `User.aliases`: secondary SMTP
+    addresses declared here and reconciled by iamkit.executors.exchange, never
+    by Terraform. The managed/enabled gates that skip a User have no analogue
+    here — a shared mailbox has neither — so a declared alias is always
+    resolved.
     """
 
     name: str
     email_address: str
     display_name: str
     delegates: list[str] = []
+    aliases: list[str] = []
 
     @field_validator("email_address")
     @classmethod
@@ -155,3 +172,18 @@ class SharedMailbox(BaseIdentityModel):
         if "@" not in v:
             raise ValueError(f"Invalid email: {v}")
         return v
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, v: list[str]) -> list[str]:
+        return _normalise_aliases(v)
+
+    @model_validator(mode="after")
+    def validate_alias_not_primary(self) -> SharedMailbox:
+        if self.email_address.lower() in self.aliases:
+            raise ValueError(
+                f"Alias '{self.email_address}' duplicates the primary address of "
+                f"shared mailbox '{self.name}'; changing the primary address is a "
+                "rename, not an alias"
+            )
+        return self

@@ -87,6 +87,20 @@ def resolve_desired_state(
             )
         )
 
+    # Shared mailboxes pass neither gate above: they carry no `account_enabled`
+    # and no `managed` flag, so there is nothing to skip on and nothing for
+    # allow_unmanaged_users to opt into. A declared alias is always resolved.
+    for mb_key, mailbox in sorted(config.shared_mailboxes.items()):
+        if not mailbox.aliases:
+            continue
+        states.append(
+            MailboxAliasDesiredState(
+                name=mb_key,
+                upn=mailbox.email_address,
+                aliases=tuple(mailbox.aliases),
+            )
+        )
+
     return states
 
 

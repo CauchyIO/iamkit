@@ -311,6 +311,48 @@ class TestSharedMailbox:
         )
         assert mb.delegates == ["alice", "carol"]
 
+    def test_aliases_default_empty(self):
+        mb = SharedMailbox(
+            name="team", email_address="team@acme.example", display_name="Team"
+        )
+        assert mb.aliases == []
+
+    def test_aliases_are_lowercased(self):
+        mb = SharedMailbox(
+            name="team",
+            email_address="team@acme.example",
+            display_name="Team",
+            aliases=["Requests@Acme.Example"],
+        )
+        assert mb.aliases == ["requests@acme.example"]
+
+    def test_alias_without_at_rejected(self):
+        with pytest.raises(ValidationError, match="Invalid alias"):
+            SharedMailbox(
+                name="team",
+                email_address="team@acme.example",
+                display_name="Team",
+                aliases=["not-an-address"],
+            )
+
+    def test_duplicate_alias_rejected(self):
+        with pytest.raises(ValidationError, match="Duplicate alias"):
+            SharedMailbox(
+                name="team",
+                email_address="team@acme.example",
+                display_name="Team",
+                aliases=["r@acme.example", "R@acme.example"],
+            )
+
+    def test_alias_equal_to_primary_rejected(self):
+        with pytest.raises(ValidationError, match="duplicates the primary address"):
+            SharedMailbox(
+                name="team",
+                email_address="team@acme.example",
+                display_name="Team",
+                aliases=["Team@acme.example"],
+            )
+
 
 # --- AccessPolicy tests ---
 
@@ -657,6 +699,33 @@ class TestEmailAddressUniqueness:
         }
         with pytest.raises(ValueError, match="info@acme.example"):
             IAMConfig(users=users, shared_mailboxes=mailboxes)
+
+    def test_shared_mailbox_alias_colliding_with_a_user_primary_rejected(self):
+        users = {
+            "bob": User(name="bob", display_name="Bob", email="bob@acme.example"),
+        }
+        mailboxes = {
+            "team": SharedMailbox(
+                name="team", email_address="team@acme.example", display_name="Team",
+                aliases=["bob@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="bob@acme.example"):
+            IAMConfig(users=users, shared_mailboxes=mailboxes)
+
+    def test_same_alias_on_two_shared_mailboxes_rejected(self):
+        mailboxes = {
+            "team": SharedMailbox(
+                name="team", email_address="team@acme.example", display_name="Team",
+                aliases=["requests@acme.example"],
+            ),
+            "hiring": SharedMailbox(
+                name="hiring", email_address="hiring@acme.example", display_name="Hiring",
+                aliases=["requests@acme.example"],
+            ),
+        }
+        with pytest.raises(ValueError, match="requests@acme.example"):
+            IAMConfig(shared_mailboxes=mailboxes)
 
     def test_distinct_addresses_accepted(self):
         users = {

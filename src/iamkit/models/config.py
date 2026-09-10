@@ -241,6 +241,8 @@ class IAMConfig(BaseIdentityModel):
 
         for mb_key, mb in self.shared_mailboxes.items():
             claim(mb.email_address, f"shared_mailbox '{mb_key}'")
+            for alias in mb.aliases:
+                claim(alias, f"shared_mailbox '{mb_key}' (alias)")
 
         # Mailing lists are mail-enabled distribution groups — directory objects
         # holding a primary SMTP address. M365 groups stay out: they declare no

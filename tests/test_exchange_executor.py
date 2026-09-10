@@ -10,7 +10,7 @@ from iamkit.executors.exchange import (
     resolve_desired_state,
 )
 from iamkit.models.config import IAMConfig
-from iamkit.models.principals import User
+from iamkit.models.principals import SharedMailbox, User
 
 DOMAINS = ["acme.example"]
 
@@ -76,6 +76,55 @@ class TestResolveDesiredState:
                 name="alice", upn="alice@acme.example",
                 aliases=("privacy@acme.example",),
             )
+        ]
+
+    def test_shared_mailbox_with_aliases_is_resolved(self):
+        config = IAMConfig(shared_mailboxes={
+            "hiring": SharedMailbox(
+                name="hiring", email_address="hiring@acme.example",
+                display_name="Hiring", aliases=["requests@acme.example"],
+            ),
+        })
+        assert resolve_desired_state(config) == [
+            MailboxAliasDesiredState(
+                name="hiring", upn="hiring@acme.example",
+                aliases=("requests@acme.example",),
+            )
+        ]
+
+    def test_shared_mailbox_without_aliases_is_skipped(self):
+        config = IAMConfig(shared_mailboxes={
+            "hiring": SharedMailbox(
+                name="hiring", email_address="hiring@acme.example",
+                display_name="Hiring",
+            ),
+        })
+        assert resolve_desired_state(config) == []
+
+    def test_users_and_shared_mailboxes_resolve_together_deterministically(self):
+        config = IAMConfig(
+            users={
+                "alice": User(
+                    name="alice", display_name="Alice", email="alice@acme.example",
+                    aliases=["privacy@acme.example"],
+                ),
+            },
+            shared_mailboxes={
+                "hiring": SharedMailbox(
+                    name="hiring", email_address="hiring@acme.example",
+                    display_name="Hiring", aliases=["requests@acme.example"],
+                ),
+            },
+        )
+        assert resolve_desired_state(config) == [
+            MailboxAliasDesiredState(
+                name="alice", upn="alice@acme.example",
+                aliases=("privacy@acme.example",),
+            ),
+            MailboxAliasDesiredState(
+                name="hiring", upn="hiring@acme.example",
+                aliases=("requests@acme.example",),
+            ),
         ]
 
     def test_disabled_user_is_skipped(self):
