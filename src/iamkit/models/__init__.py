@@ -1,5 +1,6 @@
 from iamkit.models.enums import (
     Platform,
+    MarketingRole,
     PermissionLevel,
     PrincipalSource,
     PrincipalType,
@@ -19,6 +20,7 @@ from iamkit.models.access import (
     Application,
     GitHubAccessSpec,
     LinearAccessSpec,
+    MarketingAccessSpec,
     SharePointAccessSpec,
 )
 from iamkit.models.conditional_access import (
@@ -46,6 +48,8 @@ __all__ = [
     "LicenseGroup",
     "LicenseSKU",
     "LinearAccessSpec",
+    "MarketingAccessSpec",
+    "MarketingRole",
     "M365Group",
     "MailingList",
     "ManagedIdentity",
