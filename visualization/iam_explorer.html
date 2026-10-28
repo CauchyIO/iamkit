@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-IRNh8JmxWiJNF/zrZGbR4TBNw0epyV/M9EJpUeR34qw='; script-src 'sha256-+jjrNrG8l4BzF2h/t8FK6mj+53I+xK8Ay+UumzlAGa0='; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-IRNh8JmxWiJNF/zrZGbR4TBNw0epyV/M9EJpUeR34qw='; script-src 'sha256-5GmqIU8ovvv2wEs74ttzhthPZQy4GLG6nF4MVfVmr14='; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <meta name="generator" content="iamkit">
@@ -1170,23 +1170,39 @@ kbd {
     return text;
   }
 
-  function bezierMid(e) {
+  function bezierAt(e, s) {
     const { p0, p1, p2, p3 } = edgeGeometry(e);
-    return [(p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8, (p0[1] + 3 * p1[1] + 3 * p2[1] + p3[1]) / 8];
+    const u = 1 - s;
+    const w = [u * u * u, 3 * u * u * s, 3 * u * s * s, s * s * s];
+    return [0, 1].map((i) => w[0] * p0[i] + w[1] * p1[i] + w[2] * p2[i] + w[3] * p3[i]);
   }
+
+  // Where along its curve a label may sit, middle first. A label that
+  // collides with one already placed at every stop is left off: the side
+  // panel and the table carry every grant in full.
+  const LABEL_STOPS = [0.5, 0.38, 0.62, 0.26, 0.74];
 
   function drawEdgeLabels(hot) {
     layer.labels.replaceChildren();
     if (!hot) return;
+    const placed = [];
+    const clear = (r) => !placed.some((o) => r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h);
     for (const e of layout.edges) {
       if (!hot.has(e.id) || (e.kind !== "grant" && e.kind !== "rbac")) continue;
-      const [mx, my] = bezierMid(e);
-      const g = el("g", { class: "edge-label", transform: `translate(${mx.toFixed(1)},${my.toFixed(1)})` });
+      const g = el("g", { class: "edge-label" });
       const text = el("text", { x: 0, y: 0, "text-anchor": "middle" }, grantText(e));
       g.append(text);
       layer.labels.append(g);
-      const box = text.getBBox();
-      g.insertBefore(el("rect", { x: box.x - 6, y: box.y - 2, width: box.width + 12, height: box.height + 4, rx: 6 }), text);
+      const b = text.getBBox();
+      const box = { x: b.x - 6, y: b.y - 2, w: b.width + 12, h: b.height + 4 };
+      const spot = LABEL_STOPS.map((s) => bezierAt(e, s)).find(([mx, my]) => clear({ ...box, x: mx + box.x, y: my + box.y }));
+      if (!spot) {
+        g.remove();
+        continue;
+      }
+      placed.push({ ...box, x: spot[0] + box.x, y: spot[1] + box.y });
+      g.setAttribute("transform", `translate(${spot[0].toFixed(1)},${spot[1].toFixed(1)})`);
+      g.insertBefore(el("rect", { x: box.x, y: box.y, width: box.w, height: box.h, rx: 6 }), text);
     }
   }
 
