@@ -468,42 +468,49 @@
   // ---- tracing -------------------------------------------------------------
 
   // What the node reaches (downstream) and who reaches it (upstream). Grant
-  // edges into an application carry the workspaces they open, so a trace
-  // through an application follows only those workspaces.
+  // edges into an application carry the workspaces they open, and external
+  // handles only traverse into GitHub teams.
   function trace(id) {
     const nodes = new Set([id]);
     const edges = new Set();
     const { out, in: inc } = layout.index;
 
-    const down = [[id, null]];
+    const down = [[id, null, false]];
     const seenDown = new Set();
     while (down.length) {
-      const [nid, scope] = down.pop();
-      const key = `${nid}|${scope ? scope.join(",") : "*"}`;
+      const [nid, scope, externalOnly] = down.pop();
+      const key = `${nid}|${scope ? scope.join(",") : "*"}|${externalOnly ? "ext" : "all"}`;
       if (seenDown.has(key)) continue;
       seenDown.add(key);
       for (const e of out.get(nid) || []) {
         if (e.kind === "owner") continue;
+        if (externalOnly && byId.get(e.target)?.kind !== "github_team") continue;
         if (e.kind === "workspace" && scope && !scope.includes(e.workspace)) continue;
         edges.add(e.id);
         nodes.add(e.target);
-        down.push([e.target, e.kind === "grant" && e.workspaces ? e.workspaces : null]);
+        down.push([
+          e.target,
+          e.kind === "grant" && e.workspaces ? e.workspaces : null,
+          e.kind === "external_member" ? true : externalOnly,
+        ]);
       }
     }
 
-    const up = [[id, null]];
+    const up = [[id, null, null]];
     const seenUp = new Set();
     while (up.length) {
-      const [nid, ws] = up.pop();
-      const key = `${nid}|${ws || "*"}`;
+      const [nid, ws, fromKind] = up.pop();
+      const key = `${nid}|${ws || "*"}|${fromKind || "*"}`;
       if (seenUp.has(key)) continue;
       seenUp.add(key);
+      const currentKind = byId.get(nid)?.kind || null;
       for (const e of inc.get(nid) || []) {
         if (e.kind === "owner") continue;
+        if (e.kind === "external_member" && fromKind !== null && fromKind !== "github_team") continue;
         if (e.kind === "grant" && ws && !(e.workspaces || []).includes(ws)) continue;
         edges.add(e.id);
         nodes.add(e.source);
-        up.push([e.source, e.kind === "workspace" ? e.workspace : null]);
+        up.push([e.source, e.kind === "workspace" ? e.workspace : null, currentKind]);
       }
     }
 

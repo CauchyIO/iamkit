@@ -31,10 +31,11 @@ from collections import deque
 from importlib.resources import files
 from typing import Any
 
+from iamkit.executors.linear import _ROLE_PRIORITY as _LINEAR_ROLE_PRIORITY
 from iamkit.export.terraform import _GITHUB_PERMISSION_MAP
 from iamkit.models.access import GitHubAccessSpec, LinearAccessSpec
 from iamkit.models.config import IAMConfig
-from iamkit.models.enums import Environment, PermissionLevel, PrincipalType
+from iamkit.models.enums import Environment, LinearRole, PermissionLevel, PrincipalType
 from iamkit.models.groups import LicenseGroup, M365Group, MailingList, SecurityGroup
 
 _NON_HUMAN = frozenset({"service_principal", "managed_identity"})
@@ -64,10 +65,11 @@ def _github_grant(spec: GitHubAccessSpec) -> str:
     return "; ".join(parts) or "team membership"
 
 
-def _linear_grant(spec: LinearAccessSpec) -> str:
+def _linear_grant(spec: LinearAccessSpec, *, role: LinearRole | None = None) -> str:
+    effective = (role or spec.role).value
     if spec.teams:
-        return f"{spec.role.value} · teams {_joined(sorted(spec.teams))}"
-    return spec.role.value
+        return f"{effective} · teams {_joined(sorted(spec.teams))}"
+    return effective
 
 
 def _node(
@@ -452,7 +454,10 @@ class _GraphBuilder:
                     )
                     self.link("grant", policy_id, site_id, label=level.value)
 
-            for spec in policy.applications:
+            for spec in sorted(
+                policy.applications,
+                key=lambda s: (s.application, s.role, sorted(s.workspaces), sorted(s.scopes)),
+            ):
                 self.link(
                     "grant",
                     policy_id,
@@ -518,16 +523,18 @@ class _GraphBuilder:
                 m.name == name and m.principal_type != PrincipalType.GROUP for m in group.members
             )
         )
-        seen: set[str] = set()
+        seen: set[tuple[str, tuple[str, ...]]] = set()
         paths: list[tuple[str, tuple[str, ...]]] = []
         while queue:
             key, path = queue.popleft()
-            if key in seen:
+            env_sig = (key, tuple(self.group_envs(path)))
+            if env_sig in seen:
                 continue
-            seen.add(key)
+            seen.add(env_sig)
             paths.append((key, path))
             for parent in sorted(parents[key]):
-                queue.append((parent, path + (parent,)))
+                if parent not in path:
+                    queue.append((parent, path + (parent,)))
         return paths
 
     def effective_access(self) -> None:
@@ -564,22 +571,36 @@ class _GraphBuilder:
                 self.row(principal, team, grant, policy=f"policy:{key}", envs=envs)
 
         # Linear, as executors.linear.resolve_desired_state derives roles:
-        # enabled users with a Linear identity, through declared memberships.
+        # enabled users with a Linear identity, through declared memberships
+        # (elevated by the user's baseline Linear role) or baseline-only when
+        # no policy matches.
         for user_key, user in sorted(config.users.items()):
-            if user.platform_config.linear is None or not user.account_enabled:
+            linear_cfg = user.platform_config.linear
+            if linear_cfg is None or not user.account_enabled:
                 continue
+            matched = False
             for key, policy in policies:
                 if policy.group is None or policy.linear is None:
                     continue
                 if policy.group in user.group_memberships:
+                    matched = True
+                    effective_role = (
+                        linear_cfg.role
+                        if _LINEAR_ROLE_PRIORITY[linear_cfg.role]
+                        > _LINEAR_ROLE_PRIORITY[policy.linear.role]
+                        else policy.linear.role
+                    )
                     self.row(
                         self.refs[user_key],
                         "linear",
-                        _linear_grant(policy.linear),
+                        _linear_grant(policy.linear, role=effective_role),
                         via=[self.refs[policy.group]],
                         policy=f"policy:{key}",
                         envs=self.group_envs((policy.group,)),
                     )
+            if not matched:
+                self.add(_node("linear", "linear", "linear", "Linear", "workspace"))
+                self.row(self.refs[user_key], "linear", linear_cfg.role.value)
 
         # Everything else reaches a principal through group membership,
         # nesting included. A disabled account signs in to nothing, so it
@@ -610,7 +631,15 @@ class _GraphBuilder:
                         for site, level in sorted(policy.sharepoint.sites.items()):
                             self.row(principal, f"sharepoint:{site}", level.value,
                                      via=via, policy=policy_id, envs=envs)
-                    for spec in policy.applications:
+                    for spec in sorted(
+                        policy.applications,
+                        key=lambda s: (
+                            s.application,
+                            s.role,
+                            sorted(s.workspaces),
+                            sorted(s.scopes),
+                        ),
+                    ):
                         self.row(
                             principal,
                             f"app:{spec.application}",
@@ -657,7 +686,16 @@ class _GraphBuilder:
             edge["id"] = f"e{index}"
         rows = sorted(
             self.rows,
-            key=lambda r: (r["principal"], r["target"], r["grant"], r["policy"] or "", r["via"]),
+            key=lambda r: (
+                r["principal"],
+                r["target"],
+                r["grant"],
+                r["policy"] or "",
+                r["via"],
+                r["workspaces"],
+                r["scopes"],
+                r["envs"],
+            ),
         )
         return {
             "environments": [env.value for env in Environment],

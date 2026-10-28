@@ -577,8 +577,56 @@ class TestEffectiveAccess:
     def test_linear_rows_match_the_executor(self, acme, graph):
         email_of = {f"user:{key}": u.platform_config.linear.email for key, u in acme.users.items() if u.platform_config.linear}
         holders = {email_of[r["principal"]] for r in graph["rows"] if r["target"] == "linear"}
-        assert holders == {state.email for state in resolve_desired_state(acme) if state.teams}
+        assert holders == {state.email for state in resolve_desired_state(acme)}
         assert holders == {"alice@acme.example", "bob@acme.example", "carol@acme.example"}
+        alice_grants = {r["grant"] for r in graph["rows"] if r["principal"] == "user:alice" and r["target"] == "linear"}
+        assert all(g.startswith("admin") for g in alice_grants)
+
+    def test_nested_paths_preserve_distinct_environments(self):
+        app = Application(name="portal", display_name="Portal", workspaces=["core"])
+        config = IAMConfig(
+            users={"ann": _person("ann")},
+            groups={
+                "sg-a-dev": SecurityGroup(
+                    name="sg-a-dev", environment=Environment.DEV, members=[_ref("ann")], owners=[_ref("ann")]
+                ),
+                "sg-b-prd": SecurityGroup(
+                    name="sg-b-prd", environment=Environment.PRD, members=[_ref("ann")], owners=[_ref("ann")]
+                ),
+                "sg-shared": SecurityGroup(
+                    name="sg-shared",
+                    members=[
+                        MemberReference(name="sg-a-dev", principal_type=PrincipalType.GROUP),
+                        MemberReference(name="sg-b-prd", principal_type=PrincipalType.GROUP),
+                    ],
+                    owners=[_ref("ann")],
+                ),
+            },
+            applications={"portal": app},
+            access_policies={
+                "shared-access": AccessPolicy(
+                    name="shared-access",
+                    group="sg-shared",
+                    applications=[AppAccessSpec(application="portal", role="member", workspaces=["core"])],
+                )
+            },
+        )
+        rows = [r for r in build_access_graph(config)["rows"] if r["principal"] == "user:ann" and r["target"] == "app:portal"]
+        assert {tuple(r["envs"]) for r in rows} == {("dev",), ("prd",)}
+
+    def test_same_role_bindings_with_different_workspaces_sort_deterministically(self):
+        app = Application(name="portal", display_name="Portal", workspaces=["north", "south"])
+        spec_a = AppAccessSpec(application="portal", role="member", workspaces=["north"])
+        spec_b = AppAccessSpec(application="portal", role="member", workspaces=["south"])
+        c1 = _config(
+            applications={"portal": app},
+            policies={"p": AccessPolicy(name="p", group="sg-team", applications=[spec_a, spec_b])},
+        )
+        c2 = _config(
+            applications={"portal": app},
+            policies={"p": AccessPolicy(name="p", group="sg-team", applications=[spec_b, spec_a])},
+        )
+        assert generate_visualizer_html(c1) == generate_visualizer_html(c2)
 
     def test_nested_membership_reaches_the_dev_workspace(self, graph):
         rows = [r for r in graph["rows"] if r["principal"] == "user:bob" and r["target"] == "app:acme-portal"]
