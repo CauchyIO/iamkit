@@ -3,10 +3,15 @@ from __future__ import annotations
 from pydantic import model_validator
 
 from iamkit.models.base import BaseIdentityModel
-from iamkit.models.access import AccessPolicy, AzureRoleAssignment, GitHubOrgSettings
+from iamkit.models.access import (
+    AccessPolicy,
+    Application,
+    AzureRoleAssignment,
+    GitHubOrgSettings,
+)
 from iamkit.models.conditional_access import ConditionalAccessPolicy
 from iamkit.models.enums import PrincipalType
-from iamkit.models.groups import Group, MailingList
+from iamkit.models.groups import Group, MailingList, SecurityGroup
 from iamkit.models.license import LicenseSKU
 from iamkit.models.principals import (
     ExternalUser,
@@ -40,6 +45,7 @@ class IAMConfig(BaseIdentityModel):
     shared_mailboxes: dict[str, SharedMailbox] = {}
     groups: dict[str, Group] = {}
     access_policies: dict[str, AccessPolicy] = {}
+    applications: dict[str, Application] = {}
     github_org_settings: GitHubOrgSettings | None = None
     conditional_access_policies: dict[str, ConditionalAccessPolicy] = {}
     app_registrations: dict[str, AppRegistration] = {}
@@ -61,6 +67,8 @@ class IAMConfig(BaseIdentityModel):
         errors.extend(self._validate_ca_policy_references())
         errors.extend(self._validate_shared_mailbox_delegates())
         errors.extend(self._validate_access_policies())
+        errors.extend(self._validate_application_references())
+        errors.extend(self._validate_application_roles_and_scopes())
 
         if errors:
             raise ValueError(
@@ -304,6 +312,92 @@ class IAMConfig(BaseIdentityModel):
                     errors.append(
                         f"AccessPolicy '{policy_key}' references unknown "
                         f"conditional access group '{ref}'"
+                    )
+        return errors
+
+    def _validate_application_references(self) -> list[str]:
+        # IAM-P01 for application entry: a binding names a declared
+        # application and is held by a security group a person answers for,
+        # so every grant the exporters emit resolves to a group and an owner.
+        errors: list[str] = []
+        humans = {key for key, user in self.users.items() if user.account_enabled}
+        humans.update(self.external_users)
+
+        for app_key, app in self.applications.items():
+            if app.name != app_key:
+                errors.append(
+                    f"Application key '{app_key}' does not match its name '{app.name}'"
+                )
+
+        for policy_key, policy in self.access_policies.items():
+            if not policy.applications:
+                continue
+            for spec in policy.applications:
+                if spec.application not in self.applications:
+                    errors.append(
+                        f"AccessPolicy '{policy_key}' references unknown "
+                        f"application '{spec.application}'"
+                    )
+            if policy.group is None:
+                errors.append(
+                    f"AccessPolicy '{policy_key}' binds applications but names no group"
+                )
+                continue
+            group = self.groups.get(policy.group)
+            if group is None:
+                continue  # _validate_access_policies reports the unknown group
+            if not isinstance(group, SecurityGroup):
+                errors.append(
+                    f"AccessPolicy '{policy_key}' binds applications through "
+                    f"'{policy.group}', which is not a security group"
+                )
+            elif not any(owner.name in humans for owner in group.owners):
+                errors.append(
+                    f"AccessPolicy '{policy_key}' binds applications through group "
+                    f"'{policy.group}', which has no enabled human owner"
+                )
+        return errors
+
+    def _validate_application_roles_and_scopes(self) -> list[str]:
+        errors: list[str] = []
+
+        def listed(values: list[str]) -> str:
+            return ", ".join(values) if values else "none"
+
+        for policy_key, policy in self.access_policies.items():
+            for spec in policy.applications:
+                app = self.applications.get(spec.application)
+                if app is None:
+                    continue  # _validate_application_references reports it
+                where = (
+                    f"AccessPolicy '{policy_key}' binding to application "
+                    f"'{spec.application}'"
+                )
+                if spec.role not in app.available_roles:
+                    errors.append(
+                        f"{where} uses unknown role '{spec.role}' "
+                        f"(available: {listed(app.available_roles)})"
+                    )
+                unknown_scopes = sorted(set(spec.scopes) - set(app.available_scopes))
+                if unknown_scopes:
+                    errors.append(
+                        f"{where} requests undeclared scope(s) {listed(unknown_scopes)} "
+                        f"(available: {listed(app.available_scopes)})"
+                    )
+                unknown_workspaces = sorted(set(spec.workspaces) - set(app.workspaces))
+                if unknown_workspaces:
+                    errors.append(
+                        f"{where} names undeclared workspace(s) "
+                        f"{listed(unknown_workspaces)} (available: {listed(app.workspaces)})"
+                    )
+                if app.workspaces and not spec.workspaces:
+                    # An empty list is ambiguous between "none" and "all"; a
+                    # binding that silently widened whenever the application
+                    # gained a workspace would be the worse reading.
+                    errors.append(
+                        f"{where} names no workspace; the application is partitioned "
+                        f"into {listed(app.workspaces)}, so the binding must name the "
+                        f"ones it opens"
                     )
         return errors
 

@@ -12,6 +12,8 @@ covers:
   - model:group_memberships
   - model:circular_nesting
   - model:access_policies
+  - model:application_references
+  - model:application_roles_and_scopes
   - terraform:membership_guard
 informs: []
 review:
@@ -35,6 +37,11 @@ answers for — so every group must have at least one owner.
 - **Technical**: `AccessPolicy` maps groups (never users) to platform access;
   role assignments and licenses attach to security groups; every membership
   reference must resolve or the plan fails loudly (`membership_guard`).
+  Application entry follows the same rule: `AccessPolicy.applications`
+  binds a security group with an enabled human owner to a declared
+  `Application`, and only to the roles, scopes and workspaces that
+  application declares; a binding to a partitioned application names the
+  workspaces it opens, since an empty list must never read as "all".
 - **Organizational**: teams own their groups' membership; ownership is part of
   the group definition, not tribal knowledge.
 

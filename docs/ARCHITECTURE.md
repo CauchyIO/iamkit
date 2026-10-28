@@ -34,6 +34,8 @@ Pydantic V2 schemas in `iamkit.models`. Cross-validation happens in `IAMConfig`:
 - No circular group nesting
 - GitHub handles are unique
 - License groups only contain users with `usage_location`
+- Application bindings name a declared `Application` and only its roles,
+  scopes and workspaces, through a security group with an enabled human owner
 
 ### Convention (naming/policy rules)
 
@@ -49,6 +51,14 @@ splits users into managed vs. existing, flattens group members, and derives GitH
 teams from access policies. `iamkit.export.graph_api.GraphAPIExporter` renders
 Graph API payloads for resources Terraform cannot manage (shared mailboxes,
 mailing lists).
+
+`iamkit.export.export_application_grants` compiles application bindings into
+one deterministic document per group for application-side grant stores; no
+Terraform module reads it. `iamkit.export.visualizer` compiles the same
+`IAMConfig` into nodes, edges and effective-access rows (`build_access_graph`)
+and wraps them, with the inline assets in `iamkit/export/explorer/`, into one
+self-contained HTML explorer (`generate_visualizer_html`) whose CSP pins the
+inline script and stylesheet by hash and allows nothing else.
 
 ### Terraform (infrastructure)
 

@@ -76,3 +76,40 @@ def test_missing_pattern_file_warns_and_passes_pre_push(guarded_repo: Path, tmp_
     result = run_guard(guarded_repo, tmp_path, "pre-push")
     assert result.returncode == 0
     assert "pattern file missing" in result.stderr
+
+
+def test_pre_push_new_branch_scans_only_commits_after_origin_main(guarded_repo: Path, tmp_path: Path) -> None:
+    # Simulate an older squash commit already on origin/main whose author matches
+    # the pattern, followed by a clean outgoing feature branch commit.
+    (guarded_repo / "base.txt").write_text("clean file\n")
+    subprocess.run(["git", "add", "base.txt"], cwd=guarded_repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=zzz-forbidden", "commit", "-q", "-m", "historical merge on main"],
+        cwd=guarded_repo,
+        check=True,
+    )
+    base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=guarded_repo, text=True).strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", base_sha], cwd=guarded_repo, check=True)
+
+    (guarded_repo / "feature.txt").write_text("clean feature\n")
+    subprocess.run(["git", "add", "feature.txt"], cwd=guarded_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "clean feature commit"], cwd=guarded_repo, check=True)
+    head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=guarded_repo, text=True).strip()
+
+    zero = "0" * 40
+    stdin = f"refs/heads/feat {head_sha} refs/heads/feat {zero}\n"
+    result = subprocess.run(
+        [str(SCRIPT), "pre-push"],
+        cwd=guarded_repo,
+        input=stdin,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "IAMKIT_LEAK_PATTERNS": str(tmp_path / "patterns.txt"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+

@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any
 
+from iamkit.models.base import MemberReference
 from iamkit.models.config import IAMConfig
 from iamkit.models.enums import PermissionLevel
 from iamkit.models.groups import LicenseGroup, M365Group, SecurityGroup
@@ -413,3 +414,86 @@ class TerraformExporter:
         variables_path = os.path.join(os.path.dirname(path), "github-variables.tf")
         with open(variables_path, "w") as f:
             f.write(_render_variables_tf(self._github_variable_schemas()))
+
+
+def _references(refs: list[MemberReference]) -> list[dict[str, str]]:
+    return [
+        {"name": ref.name, "principal_type": ref.principal_type.value}
+        for ref in sorted(refs, key=lambda r: (r.name, r.principal_type.value))
+    ]
+
+
+def export_application_grants(config: IAMConfig) -> dict[str, Any]:
+    """Compile applications and their group bindings into one document.
+
+    `applications` describes every declared Application. `workspace_grants`
+    maps each group that holds a binding to its resolved name, members,
+    owners and the application roles, workspaces and scopes it is granted,
+    with the AccessPolicy that declared each grant.
+
+    Deterministic: keys and lists are sorted (an application's roles keep
+    their declared order), so the output changes only when the config does
+    and a committed copy's diff is the review. It is not Terraform input:
+    nothing writes it into an .auto.tfvars.json file or a variables.tf, and
+    the Entra and GitHub modules never read it. It is the hand-off to
+    application-side grant stores.
+    """
+    applications = {
+        key: {
+            "name": app.name,
+            "display_name": app.display_name,
+            "source": app.source.value,
+            "application_id": app.application_id,
+            "audience": app.audience,
+            "redirect_uris": sorted(app.redirect_uris),
+            "available_roles": list(app.available_roles),
+            "available_scopes": sorted(app.available_scopes),
+            "workspaces": sorted(app.workspaces),
+        }
+        for key, app in sorted(config.applications.items())
+    }
+
+    # IAMConfig guarantees every policy with application bindings names an
+    # existing SecurityGroup, so the lookups below cannot miss.
+    workspace_grants: dict[str, dict[str, Any]] = {}
+    for policy_key, policy in sorted(config.access_policies.items()):
+        if not policy.applications:
+            continue
+        group = config.groups[policy.group]
+        entry = workspace_grants.setdefault(
+            policy.group,
+            {
+                "resolved_name": group.resolved_name,
+                "display_name": group.display_name,
+                "environment": group.environment.value if group.environment else None,
+                "members": _references(group.members),
+                "owners": _references(group.owners),
+                "grants": [],
+            },
+        )
+        for spec in policy.applications:
+            entry["grants"].append(
+                {
+                    "application": spec.application,
+                    "role": spec.role,
+                    "workspaces": sorted(spec.workspaces),
+                    "scopes": sorted(spec.scopes),
+                    "policy": policy_key,
+                }
+            )
+
+    for entry in workspace_grants.values():
+        entry["grants"].sort(
+            key=lambda g: (
+                g["application"],
+                g["role"],
+                g["policy"],
+                g["workspaces"],
+                g["scopes"],
+            )
+        )
+
+    return {
+        "applications": applications,
+        "workspace_grants": dict(sorted(workspace_grants.items())),
+    }
