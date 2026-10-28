@@ -148,6 +148,9 @@ class SharedMailbox(BaseIdentityModel):
     email_address: str
     display_name: str
     delegates: list[str] = []
+    # An existing licensed user may also describe this same mailbox. Explicit
+    # identity linkage avoids declaring two independent directory principals.
+    backing_user: str | None = None
 
     @field_validator("email_address")
     @classmethod
