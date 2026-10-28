@@ -106,6 +106,46 @@ design, never CI: the automation app cannot mint its own permissions, and no
 standing org-admin credential should exist for a bootstrap that happens once.
 `plan` doubles as the drift check and prints what the tenant actually granted.
 
+## Applications and the access explorer
+
+Platforms with a Terraform provider get tfvars; your own applications get
+declared entry instead. An `Application` names its roles, scopes and
+workspaces, and `AccessPolicy.applications` binds a group to one of them
+through `AppAccessSpec`. The binding group must be a security group with an
+enabled human owner, may only ask for what the application declares, and must
+name the workspaces it opens:
+
+```python
+from iamkit.models import AccessPolicy, AppAccessSpec, Application
+
+portal = Application(name="portal", display_name="Portal", workspaces=["acme", "acme-labs"])
+policy = AccessPolicy(
+    name="engineering-access",
+    group="sg-engineering",
+    applications=[AppAccessSpec(application="portal", role="member", workspaces=["acme"])],
+)
+config = IAMConfig(
+    users={"alice": alice},
+    groups={"sg-engineering": engineers},
+    applications={"portal": portal},
+    access_policies={"engineering-access": policy},
+)
+```
+
+`iamkit.export.export_application_grants(config)` compiles the bindings into
+one deterministic document per group (resolved name, members, owners, grants)
+for an application's own grant store; it is never Terraform input.
+
+`iamkit.export.generate_visualizer_html(config, title=...)` renders the whole
+config as one self-contained HTML explorer: principals and groups (plane 1),
+access policies carried onto GitHub, Linear, Entra, Azure RBAC, SharePoint and
+your applications and workspaces (plane 2), with an environment toggle,
+search, kind filters, a details panel and an effective-access table. A
+hash-pinned Content-Security-Policy blocks every network request and the
+script touches no storage, so the file opens offline and inside an iframe
+sandboxed with `allow-scripts` only. `uv run python -m examples.acme.visualize`
+writes the ACME showcase to [`visualization/iam_explorer.html`](visualization/iam_explorer.html).
+
 ## Principles and conventions
 
 [`principles/`](principles/index.md) is the governance baseline: eight

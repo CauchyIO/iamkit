@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="__IAMKIT_CSP__">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="generator" content="iamkit">
+<title>__IAMKIT_TITLE__</title>
+<style>__IAMKIT_STYLE__</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1 class="title">__IAMKIT_TITLE__</h1>
+      <p class="subtitle">Plane 1 · identity &amp; directory <span aria-hidden="true">→</span> Plane 2 · access &amp; application surfaces</p>
+    </div>
+    <div class="controls">
+      <div class="segmented" id="env-toggle" role="group" aria-label="Environment">
+        <button type="button" class="seg" data-env="dev" aria-pressed="false">DEV</button>
+        <button type="button" class="seg" data-env="acc" aria-pressed="false">ACC</button>
+        <button type="button" class="seg" data-env="prd" aria-pressed="false">PRD</button>
+      </div>
+      <div class="search">
+        <label class="visually-hidden" for="search">Search the access graph</label>
+        <input id="search" type="search" placeholder="Search people, groups, apps…" autocomplete="off" spellcheck="false">
+        <span class="search-count" id="search-count" aria-live="polite"></span>
+      </div>
+      <div class="segmented" id="view-toggle" role="group" aria-label="View">
+        <button type="button" class="seg" data-view="graph" aria-pressed="true">Graph</button>
+        <button type="button" class="seg" data-view="table" aria-pressed="false">Table</button>
+      </div>
+      <button type="button" class="icon-btn" id="theme-toggle" aria-label="Colour theme: automatic" title="Colour theme: automatic">◐</button>
+    </div>
+    <div class="filters" id="filters" role="group" aria-label="Show or hide kinds"></div>
+  </header>
+  <main class="stage" id="stage">
+    <section class="view graph-view" id="graph-view" aria-label="Access graph">
+      <svg class="graph" id="graph" role="group" aria-label="Access graph: principals and groups on the left, access policies, platforms, applications and workspaces on the right. The Table view lists every grant.">
+        <g id="viewport"><g id="bands"></g><g id="edges"></g><g id="nodes"></g><g id="edge-labels"></g></g>
+      </svg>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" class="icon-btn" data-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+        <button type="button" class="icon-btn" data-zoom="out" aria-label="Zoom out" title="Zoom out">−</button>
+        <button type="button" class="icon-btn" data-zoom="fit" aria-label="Fit to view" title="Fit to view">⤢</button>
+      </div>
+      <div class="edge-legend" aria-label="Edge legend">
+        <span class="edge-key"><svg viewBox="0 0 28 8" aria-hidden="true"><line class="key-member" x1="1" y1="4" x2="27" y2="4"/></svg>member</span>
+        <span class="edge-key"><svg viewBox="0 0 28 8" aria-hidden="true"><line class="key-owner" x1="1" y1="4" x2="27" y2="4"/></svg>owner</span>
+        <span class="edge-key"><svg viewBox="0 0 28 8" aria-hidden="true"><line class="key-beam" x1="1" y1="4" x2="27" y2="4"/></svg>policy beam</span>
+        <span class="edge-key"><svg viewBox="0 0 28 8" aria-hidden="true"><line class="key-grant" x1="1" y1="4" x2="27" y2="4"/></svg>grant</span>
+      </div>
+      <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+      <p class="hint">Click to inspect · drag to pan · scroll to zoom · <kbd>/</kbd> search · <kbd>Esc</kbd> clear</p>
+    </section>
+    <section class="view table-view" id="table-view" aria-label="Effective access" hidden>
+      <table class="grants">
+        <caption id="table-caption"></caption>
+        <thead>
+          <tr><th scope="col">Principal</th><th scope="col">Via group</th><th scope="col">Policy</th><th scope="col">Target</th><th scope="col">Grant</th><th scope="col">Workspaces</th><th scope="col">Scopes</th></tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+      <p class="empty" id="table-empty" hidden>No grant matches this environment and search.</p>
+    </section>
+    <aside class="panel" id="panel" aria-labelledby="panel-title" hidden>
+      <div class="panel-head">
+        <div class="panel-kind" id="panel-kind"></div>
+        <button type="button" class="icon-btn" id="panel-close" aria-label="Close details" title="Close">×</button>
+      </div>
+      <h2 class="panel-title" id="panel-title"></h2>
+      <p class="panel-sub" id="panel-sub"></p>
+      <div class="panel-body" id="panel-body"></div>
+    </aside>
+  </main>
+  <footer class="statusbar" id="statusbar"></footer>
+</div>
+<script type="application/json" id="iam-data">__IAMKIT_DATA__</script>
+<script>__IAMKIT_SCRIPT__</script>
+</body>
+</html>

@@ -15,6 +15,8 @@ from iamkit.models.principals import (
 from iamkit.models.groups import LicenseGroup, M365Group, MailingList, SecurityGroup
 from iamkit.models.access import (
     AccessPolicy,
+    AppAccessSpec,
+    Application,
     GitHubAccessSpec,
     LinearAccessSpec,
     SharePointAccessSpec,
@@ -30,6 +32,8 @@ from iamkit.models.config import IAMConfig
 
 __all__ = [
     "AccessPolicy",
+    "AppAccessSpec",
+    "Application",
     "BaseIdentityModel",
     "CAConditions",
     "CAGrantControls",
