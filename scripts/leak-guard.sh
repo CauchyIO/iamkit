@@ -92,7 +92,11 @@ case "${1:?usage: leak-guard.sh pre-commit|commit-msg <file>|pre-push}" in
     while read -r _local_ref local_sha _remote_ref remote_sha; do
       [ "$local_sha" = "$zero" ] && continue # ref deletion: nothing leaves
       if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then
-        range="$local_sha"
+        if base_sha=$(git merge-base origin/main "$local_sha" 2>/dev/null); then
+          range="$base_sha..$local_sha"
+        else
+          range="$local_sha"
+        fi
       else
         range="$remote_sha..$local_sha"
       fi
