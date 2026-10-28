@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from pydantic import ValidationInfo, field_validator
+from typing import Annotated
+
+from pydantic import StringConstraints, ValidationInfo, field_validator
 
 from iamkit.models.base import BaseIdentityModel
 from iamkit.models.enums import (
     GitHubBasePermission,
     LinearRole,
+    MarketingRole,
     PermissionLevel,
     PrincipalSource,
 )
@@ -51,6 +54,20 @@ class SharePointAccessSpec(BaseIdentityModel):
     """SharePoint site access specification."""
 
     sites: dict[str, PermissionLevel] = {}
+
+
+class MarketingAccessSpec(BaseIdentityModel):
+    """Group-held Marketing workspace roles and optional platform operator access.
+
+    Workspace keys are registry tenant slugs. An empty map grants no workspace;
+    operator is a separate, explicit platform-wide grant.
+    """
+
+    workspaces: dict[
+        Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=100)],
+        MarketingRole,
+    ] = {}
+    operator: bool = False
 
 
 class AzureRoleAssignment(BaseIdentityModel):
@@ -126,5 +143,6 @@ class AccessPolicy(BaseIdentityModel):
     github: GitHubAccessSpec | None = None
     linear: LinearAccessSpec | None = None
     sharepoint: SharePointAccessSpec | None = None
+    marketing: MarketingAccessSpec | None = None
     applications: list[AppAccessSpec] = []
     conditional_access_groups: list[str] = []

@@ -301,6 +301,17 @@ class IAMConfig(BaseIdentityModel):
         group_names = set(self.groups.keys())
 
         for policy_key, policy in self.access_policies.items():
+            if policy.marketing is not None:
+                if policy.group is None:
+                    errors.append(
+                        f"AccessPolicy '{policy_key}' binds marketing but names no group"
+                    )
+                elif policy.group in self.groups and not isinstance(
+                    self.groups[policy.group], SecurityGroup
+                ):
+                    errors.append(
+                        f"AccessPolicy '{policy_key}' binds marketing through a non-security group"
+                    )
             if policy.group is not None and policy.group not in group_names:
                 errors.append(
                     f"AccessPolicy '{policy_key}' references unknown group '{policy.group}'"

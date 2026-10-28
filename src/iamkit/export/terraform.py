@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from typing import Any
+from uuid import UUID
 
 from iamkit.models.base import MemberReference
 from iamkit.models.config import IAMConfig
@@ -416,6 +418,42 @@ def _references(refs: list[MemberReference]) -> list[dict[str, str]]:
         {"name": ref.name, "principal_type": ref.principal_type.value}
         for ref in sorted(refs, key=lambda r: (r.name, r.principal_type.value))
     ]
+
+
+def export_marketing_bindings(
+    config: IAMConfig,
+    *,
+    entra_tenant_id: str,
+    group_ids: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Export the tenant-scoped ACL document consumed by Marketing enrollment.
+
+    This is application input, not Terraform variables. Pass Terraform's group
+    object IDs keyed by policy.group to bind immutable IDs. With no ID mapping,
+    bindings use resolved group names and require the issuer to emit those names.
+    A partial ID mapping fails instead of silently falling back to a name.
+    The issuing Entra tenant is always explicit; group names alone never grant.
+    """
+    tenant_id = str(UUID(entra_tenant_id))
+    bindings = []
+    for key, policy in sorted(config.access_policies.items()):
+        spec = policy.marketing
+        if spec is None or (not spec.workspaces and not spec.operator):
+            continue
+        group = config.groups[policy.group]
+        external_group = (
+            str(UUID(group_ids[policy.group]))
+            if group_ids is not None
+            else group.resolved_name
+        )
+        bindings.append({
+            "policy": key,
+            "entra_tenant_id": tenant_id,
+            "external_group": external_group,
+            "workspaces": {slug: role.value for slug, role in sorted(spec.workspaces.items())},
+            "operator": spec.operator,
+        })
+    return {"version": 1, "bindings": bindings}
 
 
 def export_application_grants(config: IAMConfig) -> dict[str, Any]:

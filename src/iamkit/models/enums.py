@@ -85,6 +85,11 @@ class LinearRole(str, Enum):
     GUEST = "guest"
 
 
+class MarketingRole(str, Enum):
+    OWNER = "owner"
+    VIEWER = "viewer"
+
+
 class CAState(str, Enum):
     ENABLED = "enabled"
     DISABLED = "disabled"
