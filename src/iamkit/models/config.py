@@ -103,6 +103,8 @@ class IAMConfig(BaseIdentityModel):
         for i, (kind_a, names_a) in enumerate(namespaces):
             for kind_b, names_b in namespaces[i + 1 :]:
                 for name in sorted(names_a & names_b):
+                    if (kind_a, kind_b) == ("users", "shared_mailboxes") and self.shared_mailboxes[name].backing_user == name:
+                        continue
                     errors.append(
                         f"Name '{name}' is used by both {kind_a} and {kind_b}"
                     )
@@ -248,7 +250,17 @@ class IAMConfig(BaseIdentityModel):
                 claim(alias, f"user '{user_key}' (alias)")
 
         for mb_key, mb in self.shared_mailboxes.items():
-            claim(mb.email_address, f"shared_mailbox '{mb_key}'")
+            if mb.backing_user is None:
+                claim(mb.email_address, f"shared_mailbox '{mb_key}'")
+            else:
+                user = self.users.get(mb.backing_user)
+                if user is None or user.email.lower() != mb.email_address.lower():
+                    errors.append(
+                        f"SharedMailbox '{mb_key}' backing_user must name a user with the same email address"
+                    )
+                if any(other_key != mb_key and other.backing_user == mb.backing_user
+                       for other_key, other in self.shared_mailboxes.items()):
+                    errors.append(f"SharedMailbox '{mb_key}' duplicates backing_user '{mb.backing_user}'")
             for alias in mb.aliases:
                 claim(alias, f"shared_mailbox '{mb_key}' (alias)")
 
@@ -303,6 +315,17 @@ class IAMConfig(BaseIdentityModel):
         group_names = set(self.groups.keys())
 
         for policy_key, policy in self.access_policies.items():
+            if policy.marketing is not None:
+                if policy.group is None:
+                    errors.append(
+                        f"AccessPolicy '{policy_key}' binds marketing but names no group"
+                    )
+                elif policy.group in self.groups and not isinstance(
+                    self.groups[policy.group], SecurityGroup
+                ):
+                    errors.append(
+                        f"AccessPolicy '{policy_key}' binds marketing through a non-security group"
+                    )
             if policy.group is not None and policy.group not in group_names:
                 errors.append(
                     f"AccessPolicy '{policy_key}' references unknown group '{policy.group}'"
