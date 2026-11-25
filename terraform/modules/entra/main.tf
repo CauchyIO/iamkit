@@ -184,13 +184,18 @@ resource "azuread_group_member" "license_group_members" {
 resource "azuread_group" "m365_groups" {
   for_each = { for g in var.iam_m365_groups : g.name => g }
 
-  display_name               = each.value.display_name != null ? each.value.display_name : each.value.name
-  description                = each.value.description
-  mail_enabled               = true
-  mail_nickname              = replace(each.value.name, "-", "")
-  security_enabled           = false
-  types                      = ["Unified"]
-  auto_subscribe_new_members = true
+  display_name     = each.value.display_name != null ? each.value.display_name : each.value.name
+  description      = each.value.description
+  mail_enabled     = true
+  mail_nickname    = replace(each.value.name, "-", "")
+  security_enabled = false
+  types            = ["Unified"]
+
+  # Subscribes members to group mail. Sent in the create request, so it works
+  # for a service principal. Do not use auto_subscribe_new_members instead: the
+  # provider sets that in a second request that Graph refuses for service
+  # principals, which leaves the new group created but tainted.
+  behaviors = ["SubscribeNewGroupMembers"]
 
   owners = [
     for o in each.value.owners : local.user_object_ids[o]
@@ -201,8 +206,11 @@ resource "azuread_group" "m365_groups" {
   # Destroy is irreversible — Teams channel content cannot be restored from
   # the recycle bin (only the SharePoint site can). Note mail_nickname is a
   # ForceNew attribute; prevent_destroy hard-fails any destroy-recreate plan.
+  # behaviors is ForceNew too and only takes effect at creation, so groups that
+  # already exist keep whatever they were created with.
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [behaviors]
   }
 }
 
